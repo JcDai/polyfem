@@ -87,22 +87,22 @@ namespace polyfem::solver
 			for (const auto &f : alagr_forms)
 				current_error += f->compute_error(sol);
 			logger().debug("Current error = {}", current_error);
-			const double eta = 1 - sqrt(current_error / initial_error);
+			// const double eta = 1 - sqrt(current_error / initial_error);
 
-			logger().debug("Current eta = {}", eta);
+			// logger().debug("Current eta = {}", eta);
 
-			if (eta < 0)
-			{
-				logger().debug("Higher error than initial, increase weight and revert to previous solution");
-				sol = initial_sol;
-			}
+			// if (eta < 0)
+			// {
+			// 	logger().debug("Higher error than initial, increase weight and revert to previous solution");
+			// 	sol = initial_sol;
+			// }
 
 			nl_problem.use_reduced_size();
 			tmp_sol = nl_problem.full_to_reduced(sol);
 			nl_problem.line_search_begin(sol, tmp_sol);
 
-			if (eta < eta_tol && al_weight < max_al_weight)
-				al_weight *= scaling;
+			// if (eta < eta_tol && al_weight < max_al_weight)
+			al_weight *= scaling;
 
 			for (auto &f : alagr_forms)
 				f->update_lagrangian(sol, al_weight);

@@ -312,10 +312,10 @@ namespace polyfem::solver
 
 		timer.start();
 
-		arma::sp_mat q2a = fill_arma(Q2_);
-		arma::sp_mat q2tq2 = q2a.t() * q2a;
-		const StiffnessMatrix Q2tQ2 = fill_eigen(q2tq2);
-		// StiffnessMatrix Q2tQ2e = Q2t_ * Q2_;
+		// arma::sp_mat q2a = fill_arma(Q2_);
+		// arma::sp_mat q2tq2 = q2a.t() * q2a;
+		// const StiffnessMatrix Q2tQ2 = fill_eigen(q2tq2);
+		StiffnessMatrix Q2tQ2 = Q2t_ * Q2_;
 		// std::cout << (Q2tQ2e - Q2tQ2).norm() << std::endl;
 		timer.stop();
 		logger().debug("Getting Q2'*Q2, took: {}", timer.getElapsedTime());
@@ -520,11 +520,11 @@ namespace polyfem::solver
 
 		if (full_size() != current_size())
 		{
-			arma::sp_mat q2a = fill_arma(Q2_);
-			arma::sp_mat ha = fill_arma(hessian);
-			arma::sp_mat q2thq2 = q2a.t() * ha * q2a;
-			hessian = fill_eigen(q2thq2);
-			// hessian = Q2t_ * hessian * Q2_;
+			// arma::sp_mat q2a = fill_arma(Q2_);
+			// arma::sp_mat ha = fill_arma(hessian);
+			// arma::sp_mat q2thq2 = q2a.t() * ha * q2a;
+			// hessian = fill_eigen(q2thq2);
+			hessian = Q2t_ * hessian * Q2_;
 
 			// remove numerical zeros
 			hessian.prune([](const Eigen::Index &row, const Eigen::Index &col, const Scalar &value) {
