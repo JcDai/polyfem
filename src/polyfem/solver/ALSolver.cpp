@@ -20,7 +20,7 @@ namespace polyfem::solver
 	{
 	}
 
-	void ALSolver::solve_al(NLProblem &nl_problem, Eigen::MatrixXd &sol,
+	void ALSolver::solve_al(State &state, NLProblem &nl_problem, Eigen::MatrixXd &sol,
 							const json &nl_solver_params,
 							const json &linear_solver,
 							const double characteristic_length,
@@ -29,6 +29,12 @@ namespace polyfem::solver
 		assert(sol.size() == nl_problem.full_size());
 
 		const Eigen::VectorXd initial_sol = sol;
+
+		// debug export data
+		Eigen::MatrixXd pressure;
+		state.export_data(sol, pressure, "AL_init_");
+		//
+
 		Eigen::VectorXd tmp_sol = nl_problem.full_to_reduced(sol);
 		assert(tmp_sol.size() == nl_problem.reduced_size());
 
@@ -52,6 +58,9 @@ namespace polyfem::solver
 			current_error += f->compute_error(sol);
 
 		logger().debug("Initial error = {}", current_error);
+
+		// export data
+		state.export_data(nl_problem.reduced_to_full(tmp_sol), pressure, "AL_0_");
 
 		while (!std::isfinite(nl_problem.value(tmp_sol))
 			   || !nl_problem.is_step_valid(sol, tmp_sol)
@@ -81,8 +90,8 @@ namespace polyfem::solver
 				// if the nonlinear solve fails due to invalid energy at the current solution, changing the weights would not help
 				if (err_msg.find("f(x) is nan or inf; stopping") != std::string::npos)
 					log_and_throw_error("Failed to solve with AL; f(x) is nan or inf");
-				if (err_msg.find("Reached iteration limit") != std::string::npos)
-					log_and_throw_error("Reached iteration limit in AL");
+				// if (err_msg.find("Reached iteration limit") != std::string::npos)
+				// 	log_and_throw_error("Reached iteration limit in AL");
 			}
 
 			sol = tmp_sol;
@@ -112,6 +121,10 @@ namespace polyfem::solver
 				f->update_lagrangian(sol, al_weight);
 
 			post_subsolve(al_weight);
+
+			// export data
+			// Eigen::MatrixXd pressure;
+			state.export_data(nl_problem.reduced_to_full(tmp_sol), pressure, "AL_" + std::to_string(al_steps + 1) + "_");
 			++al_steps;
 		}
 		nl_problem.line_search_end();

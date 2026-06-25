@@ -393,7 +393,10 @@ namespace polyfem
 		};
 
 		Eigen::MatrixXd prev_sol = sol;
-		al_solver.solve_al(nl_problem, sol,
+		// al_solver.solve_al(nl_problem, sol,
+		// 				   args["solver"]["augmented_lagrangian"]["nonlinear"], args["solver"]["linear"], units.characteristic_length());
+
+		al_solver.solve_al(*this, nl_problem, sol,
 						   args["solver"]["augmented_lagrangian"]["nonlinear"], args["solver"]["linear"], units.characteristic_length());
 
 		al_solver.solve_reduced(nl_problem, sol,

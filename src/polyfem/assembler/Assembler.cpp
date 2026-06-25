@@ -520,6 +520,7 @@ namespace polyfem::assembler
 
 				const double val = compute_energy(NonLinearAssemblerData(vals, t, dt, displacement, displacement_prev, local_storage.da));
 				local_storage.val += val;
+				// std::cout << e << ": " << val << " " << std::endl;
 			}
 		});
 
@@ -559,6 +560,8 @@ namespace polyfem::assembler
 
 				const double val = compute_energy(NonLinearAssemblerData(vals, t, dt, displacement, displacement_prev, local_storage.da));
 				out[e] = val;
+
+				// std::cout << e << ": " << val << std::endl;
 			}
 		});
 

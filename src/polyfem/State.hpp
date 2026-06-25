@@ -752,6 +752,7 @@ namespace polyfem
 		/// @param[in] sol solution
 		/// @param[in] pressure pressure
 		void export_data(const Eigen::MatrixXd &sol, const Eigen::MatrixXd &pressure);
+		void export_data(const Eigen::MatrixXd &sol, const Eigen::MatrixXd &pressure, std::string prefix);
 
 		/// saves a timestep
 		/// @param[in] time time in secs

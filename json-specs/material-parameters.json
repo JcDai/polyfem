@@ -445,7 +445,8 @@
             "use_rest_pose",
             "weight",
             "id",
-            "rho"
+            "rho",
+            "power"
         ],
         "doc": "Material Parameters including ID"
     },
@@ -755,5 +756,11 @@
         "type": "float",
         "default": 1.0,
         "doc": "Scale factor for the AMIPS energy."
+    },
+    {
+        "pointer": "/power",
+        "type": "float",
+        "default": 1.0,
+        "doc": "Power exponent applied to the energy functional"
     }
 ]

@@ -99,6 +99,10 @@ namespace polyfem::solver
 		/// @brief Reset adaptive quadrature refinement after each complete nonlinear solve.
 		void finish() override;
 
+		// TODO: added for conservative check
+		void post_step(const polysolve::nonlinear::PostStepData &data) override;
+		void line_search_begin(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) override;
+
 	private:
 		const int n_bases_;
 		std::vector<basis::ElementBases> &bases_;

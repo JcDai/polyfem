@@ -352,6 +352,11 @@ namespace polyfem::solver
 
 			logger().log(step == 0 ? spdlog::level::warn : (step == 1. ? spdlog::level::trace : spdlog::level::debug),
 						 "Jacobian max step size: {} at element {}, invalid step size: {}, tree depth {}, runtime {} sec", step, invalidID, invalidStep, subdivision_tree.depth(), transient_check_time);
+
+			std::ofstream con_check_x0("con_check_x0.txt");
+			std::ofstream con_check_x1("con_check_x1.txt");
+			con_check_x0 << x0;
+			con_check_x1 << x1;
 		}
 
 		if (invalidID >= 0 && step <= 0.5)
@@ -414,6 +419,27 @@ namespace polyfem::solver
 		{
 			assembler_.assemble(is_volume_, n_bases_, bases_, geom_bases_,
 								ass_vals_cache_, t_, cached_stiffness_);
+		}
+	}
+
+	// TODO: added for conservative check
+	void ElasticForm::post_step(const polysolve::nonlinear::PostStepData &data)
+	{
+		std::cout << "in post step check" << std::endl;
+		auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, data.x);
+		if (!isvalid)
+		{
+			logger().error("post line search step creates inverted element conservative check. Element id: {}", id);
+		}
+	}
+
+	void ElasticForm::line_search_begin(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1)
+	{
+		std::cout << "in pre-step check" << std::endl;
+		auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x0);
+		if (!isvalid)
+		{
+			logger().error("pre line search step has inverted element conservative check. Element id: {}", id);
 		}
 	}
 } // namespace polyfem::solver

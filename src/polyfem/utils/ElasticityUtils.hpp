@@ -24,7 +24,8 @@ namespace polyfem
 		PK1,
 		PK2,
 		F,
-		ENERGY
+		ENERGY,
+		AMIPS
 	};
 
 	Eigen::VectorXd

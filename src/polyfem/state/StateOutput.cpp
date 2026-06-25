@@ -188,6 +188,66 @@ namespace polyfem
 		}
 	}
 
+	void State::export_data(const Eigen::MatrixXd &sol, const Eigen::MatrixXd &pressure, std::string prefix)
+	{
+		if (!mesh)
+		{
+			logger().error("Load the mesh first!");
+			return;
+		}
+		if (n_bases <= 0)
+		{
+			logger().error("Build the bases first!");
+			return;
+		}
+		// if (rhs.size() <= 0)
+		// {
+		// 	logger().error("Assemble the rhs first!");
+		// 	return;
+		// }
+		if (sol.size() <= 0)
+		{
+			logger().error("Solve the problem first!");
+			return;
+		}
+
+		// Export vtu mesh of solution + wire mesh of deformed input
+		// + mesh colored with the bases
+		const std::string vis_mesh_path = prefix + resolve_output_path(args["output"]["paraview"]["file_name"]);
+		const std::string nodes_path = prefix + resolve_output_path(args["output"]["data"]["nodes"]);
+		const std::string solution_path = prefix + resolve_output_path(args["output"]["data"]["solution"]);
+		const std::string stress_path = prefix + resolve_output_path(args["output"]["data"]["stress_mat"]);
+		const std::string mises_path = prefix + resolve_output_path(args["output"]["data"]["mises"]);
+
+		double tend = args.value("tend", 1.0);
+		double dt = 1;
+		if (!args["time"].is_null())
+			dt = args["time"]["dt"];
+
+		out_geom.export_data(
+			*this, sol, pressure,
+			!args["time"].is_null(),
+			tend, dt,
+			io::OutGeometryData::ExportOptions(args,
+											   mesh->is_linear(),
+											   mesh->has_prism(),
+											   problem->is_scalar()),
+			vis_mesh_path,
+			nodes_path,
+			solution_path,
+			stress_path,
+			mises_path,
+			is_contact_enabled());
+
+		if (assembler->name() == "Electrostatics")
+		{
+			std::shared_ptr<assembler::Electrostatics> electrostatics_assembler = std::dynamic_pointer_cast<assembler::Electrostatics>(assembler);
+			double energy = electrostatics_assembler->compute_stored_energy(mesh->is_volume(), n_bases, bases, geom_bases(), ass_vals_cache, 0, sol);
+			double capacitance = 2 * energy;
+			logger().info("Capacitance computation: {}", capacitance);
+		}
+	}
+
 	void State::save_restart_json(const double t0, const double dt, const int t) const
 	{
 		const std::string restart_json_path = args["output"]["restart_json"];

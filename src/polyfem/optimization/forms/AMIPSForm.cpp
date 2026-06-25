@@ -165,6 +165,13 @@ namespace polyfem::solver
 		return amips_energy_->assemble_energy(state_->mesh->is_volume(), init_geom_bases_, init_geom_bases_, init_ass_vals_cache_, 0, 0, AdjointTools::map_primitive_to_node_order(*state_, X - X_rest), Eigen::VectorXd());
 	}
 
+	Eigen::VectorXd AMIPSForm::value_per_element_unweighted(const Eigen::VectorXd &x) const
+	{
+		Eigen::VectorXd X = get_updated_mesh_nodes(x);
+
+		return amips_energy_->assemble_energy_per_element(state_->mesh->is_volume(), init_geom_bases_, init_geom_bases_, init_ass_vals_cache_, 0, 0, AdjointTools::map_primitive_to_node_order(*state_, X - X_rest), Eigen::VectorXd());
+	}
+
 	void AMIPSForm::compute_partial_gradient(const Eigen::VectorXd &x, Eigen::VectorXd &gradv) const
 	{
 		gradv = weight() * variable_to_simulations_.apply_parametrization_jacobian(ParameterType::Shape, state_.get(), x, [this, &x]() {

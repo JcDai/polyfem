@@ -4,6 +4,7 @@
 #include <polysolve/nonlinear/Solver.hpp>
 #include <polyfem/solver/forms/lagrangian/AugmentedLagrangianForm.hpp>
 #include <polyfem/Common.hpp>
+#include <polyfem/State.hpp>
 
 #include <Eigen/Core>
 
@@ -26,23 +27,29 @@ namespace polyfem::solver
 			const std::function<void(const Eigen::VectorXd &)> &update_barrier_stiffness);
 		virtual ~ALSolver() = default;
 
-		void solve_al(NLProblem &nl_problem, Eigen::MatrixXd &sol,
-					  std::shared_ptr<polysolve::nonlinear::Solver> nl_solver)
-		{
-			solve_al(nl_problem, sol, json{}, json{}, 1, nl_solver);
-		}
+		// void solve_al(NLProblem &nl_problem, Eigen::MatrixXd &sol,
+		// 			  std::shared_ptr<polysolve::nonlinear::Solver> nl_solver)
+		// {
+		// 	solve_al(nl_problem, sol, json{}, json{}, 1, nl_solver);
+		// }
 
-		void solve_al(NLProblem &nl_problem, Eigen::MatrixXd &sol,
+		// void solve_al(NLProblem &nl_problem, Eigen::MatrixXd &sol,
+		// 			  const json &nl_solver_params,
+		// 			  const json &linear_solver,
+		// 			  const double characteristic_length,
+		// 			  std::shared_ptr<polysolve::nonlinear::Solver> nl_solver = nullptr);
+
+		void solve_al(State &state, NLProblem &nl_problem, Eigen::MatrixXd &sol,
 					  const json &nl_solver_params,
 					  const json &linear_solver,
 					  const double characteristic_length,
 					  std::shared_ptr<polysolve::nonlinear::Solver> nl_solver = nullptr);
 
-		void solve_reduced(NLProblem &nl_problem, Eigen::MatrixXd &sol,
-						   std::shared_ptr<polysolve::nonlinear::Solver> nl_solver)
-		{
-			solve_al(nl_problem, sol, json{}, json{}, 1, nl_solver);
-		}
+		// void solve_reduced(NLProblem &nl_problem, Eigen::MatrixXd &sol,
+		// 				   std::shared_ptr<polysolve::nonlinear::Solver> nl_solver)
+		// {
+		// 	solve_al(nl_problem, sol, json{}, json{}, 1, nl_solver);
+		// }
 
 		void solve_reduced(NLProblem &nl_problem, Eigen::MatrixXd &sol,
 						   const json &nl_solver_params,

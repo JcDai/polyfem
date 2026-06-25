@@ -66,7 +66,13 @@ namespace polyfem::assembler
 
 			const T powJ = pow(det, power);
 			const double weight = get_energy_weight(el_id);
-			return T(weight) * (def_grad.transpose() * def_grad).trace() / powJ; //+ barrier<T>::value(det);
+
+			// std::cout << el_id << ": " << (def_grad.transpose() * def_grad).trace() / powJ << std::endl;
+			// return T(weight) * (def_grad.transpose() * def_grad).trace() / powJ; //+ barrier<T>::value(det);
+
+			const T base_energy = (def_grad.transpose() * def_grad).trace() / powJ;
+
+			return T(weight) * pow(base_energy, 2.);
 		}
 
 	private:
@@ -105,6 +111,8 @@ namespace polyfem::assembler
 
 			return res;
 		}
+
+		GenericMatParam power_{"power"};
 
 	public:
 		Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 3, 3> gradient(

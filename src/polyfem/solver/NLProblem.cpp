@@ -3,6 +3,7 @@
 #include <polyfem/io/OBJWriter.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
+#include <polyfem/utils/Jacobian.hpp>
 
 #include <polyfem/utils/Logger.hpp>
 
@@ -639,6 +640,13 @@ namespace polyfem::solver
 	void NLProblem::post_step(const polysolve::nonlinear::PostStepData &data)
 	{
 		FullNLProblem::post_step(polysolve::nonlinear::PostStepData(data.iter_num, data.solver_info, reduced_to_full(data.x), reduced_to_full(data.grad)));
+
+		// // TODO: remove me, post step conservative check
+		// auto [isvalid, id, tree] = is_valid(3, bases_, geom_bases_, reduced_to_full(data.x));
+		// if (!isvalid)
+		// {
+		// 	logger().error("post line search step creates inverted element conservative check. Element id: {}", id);
+		// }
 
 		if (penalty_problem_ && full_size() == current_size())
 			penalty_problem_->post_step(data);

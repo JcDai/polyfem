@@ -98,12 +98,12 @@ namespace polyfem::assembler
 				stress_tensor = pk1_from_cauchy(stress_tensor, deformation_grad);
 			else if (type == ElasticityTensorType::PK2)
 				stress_tensor = pk2_from_cauchy(stress_tensor, deformation_grad);
+
 			if (type == ElasticityTensorType::ENERGY)
 			{
-				all(p, 0) = std::isfinite(val.getValue()) ? val.getValue() : 1e10;
+				all(p, 0) = val.getValue();
 				continue;
 			}
-
 			all.row(p) = fun(stress_tensor);
 		}
 	}

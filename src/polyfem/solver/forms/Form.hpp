@@ -164,6 +164,7 @@ namespace polyfem::solver
 		/// @return Computed value
 		virtual double value_unweighted(const Eigen::VectorXd &x) const = 0;
 
+	public:
 		/// @brief Compute the value of the form multiplied per element
 		/// @param x Current solution
 		/// @return Computed value per element
@@ -172,6 +173,7 @@ namespace polyfem::solver
 			throw std::runtime_error("Not implemented");
 		}
 
+	protected:
 		/// @brief Compute the first derivative of the value wrt x
 		/// @param[in] x Current solution
 		/// @param[out] gradv Output gradient of the value wrt x
