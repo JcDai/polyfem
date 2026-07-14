@@ -117,6 +117,15 @@ namespace polyfem::utils
 		const Eigen::VectorXd &u2,
 		const double threshold = 0);
 
+	std::tuple<bool, int>
+	is_valid_with_id(
+		const int dim,
+		const std::vector<basis::ElementBases> &bases,
+		const std::vector<basis::ElementBases> &gbases,
+		const Eigen::VectorXd &u1,
+		const Eigen::VectorXd &u2,
+		const double threshold = 0);
+
 	std::tuple<double, int, double, Tree> max_time_step(
 		const int dim,
 		const std::vector<basis::ElementBases> &bases,

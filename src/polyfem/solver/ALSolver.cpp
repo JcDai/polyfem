@@ -32,7 +32,7 @@ namespace polyfem::solver
 
 		// debug export data
 		Eigen::MatrixXd pressure;
-		state.export_data(sol, pressure, "AL_init_");
+		// state.export_data(sol, pressure, "AL_init_");
 		//
 
 		Eigen::VectorXd tmp_sol = nl_problem.full_to_reduced(sol);
@@ -60,7 +60,7 @@ namespace polyfem::solver
 		logger().debug("Initial error = {}", current_error);
 
 		// export data
-		state.export_data(nl_problem.reduced_to_full(tmp_sol), pressure, "AL_0_");
+		// state.export_data(nl_problem.reduced_to_full(tmp_sol), pressure, "AL_0_");
 
 		while (!std::isfinite(nl_problem.value(tmp_sol))
 			   || !nl_problem.is_step_valid(sol, tmp_sol)
@@ -124,7 +124,7 @@ namespace polyfem::solver
 
 			// export data
 			// Eigen::MatrixXd pressure;
-			state.export_data(nl_problem.reduced_to_full(tmp_sol), pressure, "AL_" + std::to_string(al_steps + 1) + "_");
+			// state.export_data(nl_problem.reduced_to_full(tmp_sol), pressure, "AL_" + std::to_string(al_steps + 1) + "_");
 			++al_steps;
 		}
 		nl_problem.line_search_end();

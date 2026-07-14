@@ -8,6 +8,9 @@
 #include <polyfem/utils/Logger.hpp>
 #include <polyfem/utils/Timer.hpp>
 
+#include <polyfem/utils/Jacobian.hpp>
+#include <polyfem/io/MshWriter.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -353,10 +356,10 @@ namespace polyfem::solver
 			logger().log(step == 0 ? spdlog::level::warn : (step == 1. ? spdlog::level::trace : spdlog::level::debug),
 						 "Jacobian max step size: {} at element {}, invalid step size: {}, tree depth {}, runtime {} sec", step, invalidID, invalidStep, subdivision_tree.depth(), transient_check_time);
 
-			std::ofstream con_check_x0("con_check_x0.txt");
-			std::ofstream con_check_x1("con_check_x1.txt");
-			con_check_x0 << x0;
-			con_check_x1 << x1;
+			// std::ofstream con_check_x0("con_check_x0.txt");
+			// std::ofstream con_check_x1("con_check_x1.txt");
+			// con_check_x0 << x0;
+			// con_check_x1 << x1;
 		}
 
 		if (invalidID >= 0 && step <= 0.5)
@@ -423,13 +426,47 @@ namespace polyfem::solver
 	}
 
 	// TODO: added for conservative check
+
+	void saveToBinary(const Eigen::MatrixXd &matrix, const std::string &filename)
+	{
+		std::ofstream out(filename, std::ios::out | std::ios::binary | std::ios::trunc);
+		if (!out.is_open())
+		{
+			throw std::runtime_error("Failed to open file for writing: " + filename);
+		}
+
+		// Write the matrix dimensions
+		Eigen::MatrixXd::Index rows = matrix.rows();
+		Eigen::MatrixXd::Index cols = matrix.cols();
+		// out.write(reinterpret_cast<const char *>(&rows), sizeof(rows));
+		// out.write(reinterpret_cast<const char *>(&cols), sizeof(cols));
+
+		// Write the raw data array
+		out.write(reinterpret_cast<const char *>(matrix.data()), rows * cols * sizeof(double));
+		out.close();
+	}
+
 	void ElasticForm::post_step(const polysolve::nonlinear::PostStepData &data)
 	{
 		std::cout << "in post step check" << std::endl;
+
 		auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, data.x);
+		// auto [isvalid, id] = is_valid_with_id(is_volume_ ? 3 : 2, bases_, geom_bases_, data.x, data.x);
+		const int order = std::max(bases_[0].bases.front().order(), geom_bases_[0].bases.front().order());
+
+		// std::ofstream con_check_x1("con_check_x_step.txt");
+		// con_check_x1 << std::setprecision(17) << data.x;
 		if (!isvalid)
 		{
-			logger().error("post line search step creates inverted element conservative check. Element id: {}", id);
+			Eigen::MatrixXd cp = polyfem::utils::extract_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_, data.x, order);
+			saveToBinary(cp.reshaped<Eigen::RowMajor>(), "post_step_cp_full.txt");
+
+			// Eigen::MatrixXd cp_id = cp.block<20, 3>(id * 20, 0);
+			// saveToBinary(cp_id.reshaped<Eigen::RowMajor>(), "post_step_cp_" + std::to_string(id) + ".txt");
+
+			logger()
+				.error("post line search step creates inverted element conservative check. Element id: {}", id);
+			exit(0);
 		}
 	}
 
@@ -437,9 +474,30 @@ namespace polyfem::solver
 	{
 		std::cout << "in pre-step check" << std::endl;
 		auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x0);
+		// auto [isvalid, id] = is_valid_with_id(is_volume_ ? 3 : 2, bases_, geom_bases_, x0, x0);
 		if (!isvalid)
 		{
 			logger().error("pre line search step has inverted element conservative check. Element id: {}", id);
 		}
+		// std::ofstream con_check_x0("con_check_x_0.txt");
+		// con_check_x0 << std::setprecision(17) << x0;
+
+		// std::ofstream con_check_x1("con_check_x_1.txt");
+		// con_check_x1 << std::setprecision(17) << x1;
+
+		const int order = std::max(bases_[0].bases.front().order(), geom_bases_[0].bases.front().order());
+		Eigen::MatrixXd cp = polyfem::utils::extract_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_, x0, order);
+		saveToBinary(cp.reshaped<Eigen::RowMajor>(), "pre_step_cp_full.txt");
+
+		// id = 19050;
+		// Eigen::MatrixXd cp_id = cp.block<20, 3>(id * 20, 0);
+		// saveToBinary(cp_id.reshaped<Eigen::RowMajor>(), "pre_step_cp_" + std::to_string(id) + ".txt");
+
+		Eigen::MatrixXd cp_full_step = polyfem::utils::extract_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_, x1, order);
+		saveToBinary(cp_full_step.reshaped<Eigen::RowMajor>(), "step_dest_cp_full.txt");
+
+		// id = 19050;
+		// Eigen::MatrixXd cp_full_step_id = cp_full_step.block<20, 3>(id * 20, 0);
+		// saveToBinary(cp_full_step_id.reshaped<Eigen::RowMajor>(), "step_dest_cp_" + std::to_string(id) + ".txt");
 	}
 } // namespace polyfem::solver

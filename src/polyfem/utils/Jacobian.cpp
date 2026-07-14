@@ -1,3 +1,4 @@
+#include <cfenv>
 #include <numeric>
 #ifdef POLYFEM_WITH_BEZIER
 #include <element_validity.hpp>
@@ -15,6 +16,28 @@ namespace polyfem::utils
 {
 	namespace
 	{
+		class ScopedFenvRestorer
+		{
+		public:
+			ScopedFenvRestorer()
+				: valid_(std::fegetenv(&env_) == 0)
+			{
+			}
+
+			~ScopedFenvRestorer()
+			{
+				if (valid_)
+					std::fesetenv(&env_);
+			}
+
+			ScopedFenvRestorer(const ScopedFenvRestorer &) = delete;
+			ScopedFenvRestorer &operator=(const ScopedFenvRestorer &) = delete;
+
+		private:
+			std::fenv_t env_;
+			bool valid_;
+		};
+
 		template <int n, int s, int p>
 		bool check_static(
 			const int n_threads,
@@ -23,6 +46,7 @@ namespace polyfem::utils
 			Tree &tree)
 		{
 #ifdef POLYFEM_WITH_BEZIER
+			const ScopedFenvRestorer restore_fenv;
 			std::vector<int> hierarchy;
 			StaticValidator<n, s, p> check(n_threads);
 			const auto flag_ = check.isValid(cp, &hierarchy, &invalid_id);
@@ -51,6 +75,7 @@ namespace polyfem::utils
 			int &invalid_id)
 		{
 #ifdef POLYFEM_WITH_BEZIER
+			const ScopedFenvRestorer restore_fenv;
 			std::vector<int> hierarchy;
 			ContinuousValidator<n, s, p> check(n_threads);
 			check.setPrecisionTarget(1);
@@ -74,6 +99,7 @@ namespace polyfem::utils
 			Tree &tree)
 		{
 #ifdef POLYFEM_WITH_BEZIER
+			const ScopedFenvRestorer restore_fenv;
 			std::vector<int> hierarchy;
 			ContinuousValidator<n, s, p> check(n_threads);
 			typename ContinuousValidator<n, s, p>::Info info;
@@ -104,12 +130,20 @@ namespace polyfem::utils
 			autogen::p_nodes_3d(order, local_pts);
 		else
 			autogen::p_nodes_2d(order, local_pts);
+
+		// std::cout << "local_pts size: " << local_pts.rows() << " " << local_pts.cols() << std::endl;
+
 		const int n_basis_per_cell = local_pts.rows();
 		Eigen::MatrixXd cp = Eigen::MatrixXd::Zero(n_elem * n_basis_per_cell, dim);
+
+		// std::cout << "cp size: " << cp.rows() << " " << cp.cols() << std::endl;
+
 		for (int e = 0; e < n_elem; ++e)
 		{
 			ElementAssemblyValues vals;
 			vals.compute(e, dim == 3, local_pts, bases[e], gbases[e]);
+
+			// std::cout << "!!!!" << vals.basis_values.size() << std::endl;
 
 			for (std::size_t j = 0; j < vals.basis_values.size(); ++j)
 				for (const auto &g : vals.basis_values[j].global)
@@ -119,6 +153,8 @@ namespace polyfem::utils
 			gbases[e].eval_geom_mapping(local_pts, mapped);
 			cp.middleRows(e * n_basis_per_cell, n_basis_per_cell) += mapped;
 		}
+		// std::cout << "cp size: " << cp.rows() << " " << cp.cols() << std::endl;
+
 		return cp;
 	}
 
@@ -148,6 +184,7 @@ namespace polyfem::utils
 		const Eigen::MatrixXd &uv)
 	{
 #ifdef POLYFEM_WITH_BEZIER
+		const ScopedFenvRestorer restore_fenv;
 		if (cp.cols() == 2)
 		{
 			switch (order)
@@ -223,6 +260,7 @@ namespace polyfem::utils
 		const int n_threads = utils::NThread::get().num_threads();
 
 #ifdef POLYFEM_WITH_BEZIER
+		const ScopedFenvRestorer restore_fenv;
 		if (cp.cols() == 2)
 		{
 			switch (order)
@@ -305,11 +343,15 @@ namespace polyfem::utils
 		const int n_basis_per_cell = std::max(bases[0].bases.size(), gbases[0].bases.size());
 		Eigen::MatrixXd cp = extract_nodes(dim, bases, gbases, u, order);
 
+		// std::cout << cp.rows() << " " << cp.cols() << std::endl;
+		// std::cout << cp.row(0) << std::endl;
+
 		bool flag = false;
 		int invalid_id = 0;
 		Tree tree;
 
 		const int n_threads = utils::NThread::get().num_threads();
+		std::cout << "static check threads: " << n_threads << std::endl;
 
 		if (dim == 2)
 		{
@@ -355,7 +397,8 @@ namespace polyfem::utils
 		return {flag, invalid_id, tree};
 	}
 
-	bool is_valid(
+	bool
+	is_valid(
 		const int dim,
 		const std::vector<basis::ElementBases> &bases,
 		const std::vector<basis::ElementBases> &gbases,
@@ -404,6 +447,67 @@ namespace polyfem::utils
 				throw std::invalid_argument("Order not supported");
 			}
 		}
+	}
+
+	std::tuple<bool, int> is_valid_with_id(
+		const int dim,
+		const std::vector<basis::ElementBases> &bases,
+		const std::vector<basis::ElementBases> &gbases,
+		const Eigen::VectorXd &u1,
+		const Eigen::VectorXd &u2,
+		const double threshold)
+	{
+		const int order = std::max(bases[0].bases.front().order(), gbases[0].bases.front().order());
+		const int n_basis_per_cell = std::max(bases[0].bases.size(), gbases[0].bases.size());
+
+		const Eigen::MatrixXd cp1 = extract_nodes(dim, bases, gbases, u1, order);
+		const Eigen::MatrixXd cp2 = extract_nodes(dim, bases, gbases, u2, order);
+
+		int invalid_id = 0;
+		bool flag = false;
+		const int n_threads = utils::NThread::get().num_threads();
+
+		if (dim == 2)
+		{
+			switch (order)
+			{
+			case 1:
+				flag = check_transient<2, 2, 1>(n_threads, cp1, cp2, invalid_id);
+				break;
+			case 2:
+				flag = check_transient<2, 2, 2>(n_threads, cp1, cp2, invalid_id);
+				break;
+			case 3:
+				flag = check_transient<2, 2, 3>(n_threads, cp1, cp2, invalid_id);
+				break;
+			case 4:
+				flag = check_transient<2, 2, 4>(n_threads, cp1, cp2, invalid_id);
+				break;
+			default:
+				throw std::invalid_argument("Order not supported");
+			}
+		}
+		else
+		{
+			switch (order)
+			{
+			case 1:
+				flag = check_transient<3, 3, 1>(n_threads, cp1, cp2, invalid_id);
+				break;
+			case 2:
+				flag = check_transient<3, 3, 2>(n_threads, cp1, cp2, invalid_id);
+				break;
+			case 3:
+				flag = check_transient<3, 3, 3>(n_threads, cp1, cp2, invalid_id);
+				break;
+			// case 4:
+			//     return check_transient<3, 3, 4>(n_threads, cp1, cp2, invalid_id);
+			default:
+				throw std::invalid_argument("Order not supported");
+			}
+		}
+
+		return {flag, invalid_id};
 	}
 
 	std::tuple<double, int, double, Tree> max_time_step(

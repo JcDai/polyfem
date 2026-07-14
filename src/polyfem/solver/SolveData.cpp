@@ -33,6 +33,24 @@ namespace polyfem::solver
 {
 	using namespace polyfem::time_integrator;
 
+	namespace
+	{
+		std::vector<long> read_triplet_shape(h5pp::File &file, const std::string &path)
+		{
+			const auto info = file.getDatasetInfo(path);
+			const size_t bytes_per_entry = H5Tget_size(info.h5Type.value());
+
+			if (bytes_per_entry <= sizeof(int))
+			{
+				const std::vector<int> shape = file.readDataset<std::vector<int>>(path);
+				return std::vector<long>(shape.begin(), shape.end());
+			}
+
+			const std::vector<long long> shape = file.readDataset<std::vector<long long>>(path);
+			return std::vector<long>(shape.begin(), shape.end());
+		}
+	} // namespace
+
 	std::vector<std::shared_ptr<Form>> SolveData::init_forms(
 		// General
 		const Units &units,
@@ -261,7 +279,7 @@ namespace polyfem::solver
 				std::vector<double> values = file.readDataset<std::vector<double>>("A_triplets/values");
 				std::vector<int> rows = file.readDataset<std::vector<int>>("A_triplets/rows");
 				std::vector<int> cols = file.readDataset<std::vector<int>>("A_triplets/cols");
-				std::vector<long> shape = file.readDataset<std::vector<long>>("A_triplets/shape");
+				std::vector<long> shape = read_triplet_shape(file, "A_triplets/shape");
 				utils::scatter_matrix(ndof, dim, shape, rows, cols, values, bin, local2global, A, b);
 
 				if (!file.findGroups("A_proj_triplets").empty())
@@ -279,7 +297,7 @@ namespace polyfem::solver
 					std::vector<int> rows_proj = file.readDataset<std::vector<int>>("A_proj_triplets/rows");
 					std::vector<int> cols_proj = file.readDataset<std::vector<int>>("A_proj_triplets/cols");
 					Eigen::MatrixXd b_projin = file.readDataset<Eigen::MatrixXd>("b_proj");
-					std::vector<long> shape_proj = file.readDataset<std::vector<long>>("A_proj_triplets/shape");
+					std::vector<long> shape_proj = read_triplet_shape(file, "A_proj_triplets/shape");
 
 					utils::scatter_matrix_col(ndof, dim, shape_proj, rows_proj, cols_proj, values_proj, b_projin, local2global, A_proj, b_proj);
 				}
@@ -328,7 +346,7 @@ namespace polyfem::solver
 				std::vector<double> values = file.readDataset<std::vector<double>>("A_triplets/values");
 				std::vector<int> rows = file.readDataset<std::vector<int>>("A_triplets/rows");
 				std::vector<int> cols = file.readDataset<std::vector<int>>("A_triplets/cols");
-				std::vector<long> shape = file.readDataset<std::vector<long>>("A_triplets/shape");
+				std::vector<long> shape = read_triplet_shape(file, "A_triplets/shape");
 
 				utils::scatter_matrix(ndof, dim, shape, rows, cols, values, bin, local2global, A, b);
 			}
