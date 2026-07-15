@@ -204,7 +204,7 @@ namespace polyfem::solver
 			bs.set_quadrature([quad](Quadrature &quad_) {
 				quad_ = quad;
 			});
-			logger().debug("New number of quadrature points: {}, level: {}", quad.size(), tree.depth());
+			// logger().debug("New number of quadrature points: {}, level: {}", quad.size(), tree.depth());
 
 			if (ass_vals_cache.is_initialized())
 				ass_vals_cache.update(invalidID, dim == 3, bs, gbs);
@@ -322,6 +322,26 @@ namespace polyfem::solver
 		pending_refinement_.reset();
 	}
 
+	// added for conservative check
+	void saveToBinary(const Eigen::MatrixXd &matrix, const std::string &filename)
+	{
+		std::ofstream out(filename, std::ios::out | std::ios::binary | std::ios::trunc);
+		if (!out.is_open())
+		{
+			throw std::runtime_error("Failed to open file for writing: " + filename);
+		}
+
+		// Write the matrix dimensions
+		Eigen::MatrixXd::Index rows = matrix.rows();
+		Eigen::MatrixXd::Index cols = matrix.cols();
+		// out.write(reinterpret_cast<const char *>(&rows), sizeof(rows));
+		// out.write(reinterpret_cast<const char *>(&cols), sizeof(cols));
+
+		// Write the raw data array
+		out.write(reinterpret_cast<const char *>(matrix.data()), rows * cols * sizeof(double));
+		out.close();
+	}
+
 	double ElasticForm::max_step_size(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) const
 	{
 		if (check_inversion_ == ElementInversionCheck::Discrete)
@@ -398,6 +418,20 @@ namespace polyfem::solver
 
 	void ElasticForm::post_step(const polysolve::nonlinear::PostStepData &data)
 	{
+		std::cout << "in post step check" << std::endl;
+
+		auto [isvalid, invalid_id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, data.x);
+		const int order = std::max(bases_[0].bases.front().order(), geom_bases_[0].bases.front().order());
+		if (!isvalid)
+		{
+			Eigen::MatrixXd cp = polyfem::utils::extract_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_, data.x, order);
+			saveToBinary(cp.reshaped<Eigen::RowMajor>(), "post_step_cp_full.txt");
+
+			logger()
+				.error("post line search step creates inverted element conservative check. Element id: {}", invalid_id);
+			exit(0);
+		}
+
 		if (!pending_refinement_.has_value())
 			return;
 
@@ -429,4 +463,22 @@ namespace polyfem::solver
 								ass_vals_cache_, t_, cached_stiffness_);
 		}
 	}
+
+	void ElasticForm::line_search_begin(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1)
+	{
+		std::cout << "in pre-step check" << std::endl;
+		auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x0);
+		if (!isvalid)
+		{
+			logger().error("pre line search step has inverted element conservative check. Element id: {}", id);
+		}
+
+		const int order = std::max(bases_[0].bases.front().order(), geom_bases_[0].bases.front().order());
+		Eigen::MatrixXd cp = polyfem::utils::extract_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_, x0, order);
+		saveToBinary(cp.reshaped<Eigen::RowMajor>(), "pre_step_cp_full.txt");
+
+		Eigen::MatrixXd cp_full_step = polyfem::utils::extract_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_, x1, order);
+		saveToBinary(cp_full_step.reshaped<Eigen::RowMajor>(), "step_dest_cp_full.txt");
+	}
+
 } // namespace polyfem::solver

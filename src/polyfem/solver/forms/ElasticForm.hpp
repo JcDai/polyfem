@@ -102,6 +102,8 @@ namespace polyfem::solver
 		/// most recent max_step_size() call, once the step is accepted.
 		void post_step(const polysolve::nonlinear::PostStepData &data) override;
 
+		void line_search_begin(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) override;
+
 	private:
 		const int n_bases_;
 		std::vector<basis::ElementBases> &bases_;
