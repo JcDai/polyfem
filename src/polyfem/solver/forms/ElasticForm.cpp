@@ -148,7 +148,7 @@ namespace polyfem::solver
 			return {out, levels};
 		}
 
-		quadrature::Quadrature refine_quadrature(const Tree &tree, const int dim, const int order)
+		quadrature::Quadrature refine_quadrature(const Tree &tree, const int dim, const int order, const bool interior_only = false)
 		{
 			Eigen::MatrixXd pts(dim + 1, dim);
 			if (dim == 2)
@@ -172,7 +172,7 @@ namespace polyfem::solver
 			}
 			else
 			{
-				TetQuadrature tet_quadrature(true);
+				TetQuadrature tet_quadrature(!interior_only);
 				// The corner rule for order 4 (Liu-Vinokur 9) has a large negative
 				// weight at the centroid, which corrupts non-polynomial integrands
 				// like NeoHookean near inversion. Order 5 has all-positive weights.
@@ -195,10 +195,10 @@ namespace polyfem::solver
 			return quad;
 		}
 
-		void update_quadrature(const int invalidID, const int dim, Tree &tree, const int quad_order, basis::ElementBases &bs, const basis::ElementBases &gbs, assembler::AssemblyValsCache &ass_vals_cache)
+		void update_quadrature(const int invalidID, const int dim, Tree &tree, const int quad_order, basis::ElementBases &bs, const basis::ElementBases &gbs, assembler::AssemblyValsCache &ass_vals_cache, const bool interior_only = false)
 		{
 			// update quadrature to capture the point with negative jacobian
-			const Quadrature quad = refine_quadrature(tree, dim, quad_order);
+			const Quadrature quad = refine_quadrature(tree, dim, quad_order, interior_only);
 
 			// capture the flipped point by refining the quadrature
 			bs.set_quadrature([quad](Quadrature &quad_) {
@@ -337,7 +337,7 @@ namespace polyfem::solver
 			double transient_check_time = 0;
 			{
 				POLYFEM_SCOPED_TIMER("Transient Jacobian Check", transient_check_time);
-				std::tie(step, invalidID, invalidStep, subdivision_tree) = max_time_step(dim, bases_, geom_bases_, x0, x1, .25, 0., conservative_max_iter_);
+				std::tie(step, invalidID, invalidStep, subdivision_tree) = max_time_step(dim, bases_, geom_bases_, x0, x1, .25, 0., conservative_max_iter_, degenerate_tets_);
 			}
 
 			logger().log(step == 0 ? spdlog::level::err : (step == 1. ? spdlog::level::trace : spdlog::level::debug),
@@ -368,12 +368,36 @@ namespace polyfem::solver
 		return step;
 	}
 
+    void ElasticForm::load_degenerate_edges(const std::string &path, const Eigen::VectorXi &input_to_node)
+    {
+        if (check_inversion_ == ElementInversionCheck::Discrete)
+            return;
+        if (!path.empty() && !is_volume_)
+            throw std::runtime_error("Degenerate edges require tetrahedra");
+        const auto metadata = utils::read_degenerate_edges(path, input_to_node, bases_);
+        const int dim = is_volume_ ? 3 : 2;
+        int marked_count = 0;
+        for (int e = 0; e < int(bases_.size()); ++e)
+        {
+            const bool was_marked = !degenerate_tets_.empty() && degenerate_tets_[e].vertex >= 0;
+            const bool marked = !metadata.empty() && metadata[e].vertex >= 0;
+            marked_count += marked;
+            // A declared cone is an allowed zero, not an AMIPS integration point.
+            // Use a full interior rule, and restore the corner rule if reloaded unmarked.
+            if (marked || was_marked)
+                update_quadrature(e, dim, quadrature_hierarchy_[e], quadrature_order_,
+                                  bases_[e], geom_bases_[e], ass_vals_cache_, marked);
+        }
+        degenerate_tets_ = metadata;
+        logger().info("Using interior energy quadrature for {} declared cone tetrahedra", marked_count);
+    }
+
 	bool ElasticForm::is_step_collision_free(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) const
 	{
 		if (check_inversion_ == ElementInversionCheck::Discrete)
 			return true;
 
-		const auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x1, 0., conservative_max_iter_);
+		const auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x1, 0., conservative_max_iter_, degenerate_tets_);
 		return isvalid;
 	}
 
@@ -417,7 +441,8 @@ namespace polyfem::solver
 		{
 			auto &bs = bases_[id];
 			auto &gbs = geom_bases_[id];
-			update_quadrature(id, dim, quadrature_hierarchy_[id], quadrature_order_, bs, gbs, ass_vals_cache_);
+			update_quadrature(id, dim, quadrature_hierarchy_[id], quadrature_order_, bs, gbs, ass_vals_cache_,
+                              !degenerate_tets_.empty() && degenerate_tets_[id].vertex >= 0);
 		}
 	}
 

@@ -440,3 +440,195 @@ TEST_CASE("jacobian extract nodes over element ranges", "[jacobian][utils]")
 		for (int c = 0; c < first_cp.cols(); ++c)
 			REQUIRE(first_cp(r, c) == Catch::Approx(all_cp(r, c)).margin(1e-12));
 }
+
+#ifdef POLYFEM_WITH_MISO
+#include <fstream>
+#include <filesystem>
+
+namespace {
+basis::ElementBases cone_test_basis(const Eigen::MatrixXd &cp) {
+    basis::ElementBases result;
+    result.bases.resize(20);
+    for (int i=0;i<20;++i) {
+        result.bases[i].init(3,i,i,cp.row(i));
+        result.bases[i].set_basis([i](const Eigen::MatrixXd &uv,Eigen::MatrixXd &v) {
+            autogen::p_basis_value_3d(true,3,i,uv,v);
+        });
+        result.bases[i].set_grad([i](const Eigen::MatrixXd &uv,Eigen::MatrixXd &v) {
+            autogen::p_grad_basis_value_3d(true,3,i,uv,v);
+        });
+    }
+    return result;
+}
+}
+
+TEST_CASE("cone metadata remaps input IDs and validates directed edges", "[jacobian][cone]") {
+    Eigen::MatrixXd cp;
+    autogen::p_nodes_3d(3,cp);
+    std::vector<basis::ElementBases> bs{cone_test_basis(cp)};
+    Eigen::VectorXi mapping(20);
+    for(int i=0;i<20;++i) mapping[i]=19-i;
+    const auto path=std::filesystem::temp_directory_path()/"polyfem_cone_edges_test.txt";
+    struct Cleanup { std::filesystem::path p; ~Cleanup(){std::filesystem::remove(p);} } cleanup{path};
+    { std::ofstream out(path); out << "19 15\n19 10\n19 15\n"; }
+    auto metadata=utils::read_degenerate_edges(path.string(),mapping,bs);
+    REQUIRE(metadata.size()==1);
+    CHECK(metadata[0].vertex==0);
+    CHECK(metadata[0].near_nodes==std::vector<int>{4,9});
+    for(const std::string bad:{"-1 3\n","0 40\n","19 18\n","19 15 extra\n","15 19\n"}) {
+        {std::ofstream out(path);out<<bad;}
+        CHECK_THROWS(utils::read_degenerate_edges(path.string(),mapping,bs));
+    }
+}
+
+TEST_CASE("cone masks use the local corner numbering", "[jacobian][cone]") {
+    constexpr int near[4][4]={{-1,4,9,10},{5,-1,6,12},{8,7,-1,14},{11,13,15,-1}};
+    for(int vertex=0;vertex<4;++vertex) for(int order=1;order<=2;++order) {
+        Eigen::MatrixXd cp;
+        autogen::p_nodes_3d(3,cp);
+        utils::DegenerateTets metadata(1);
+        metadata[0].vertex=vertex;
+        for(int w=0;w<4 && metadata[0].near_nodes.size()<size_t(order);++w) {
+            if(w==vertex) continue;
+            int node=near[vertex][w];
+            cp.row(node)=cp.row(vertex);
+            metadata[0].near_nodes.push_back(node);
+        }
+        std::vector<basis::ElementBases> bs{cone_test_basis(cp)};
+        CHECK(std::get<0>(utils::is_valid(3,bs,bs,Eigen::VectorXd::Zero(60),0,1000,metadata)));
+    }
+}
+
+TEST_CASE("conservative checks allow marked cone zeros but detect inversion", "[jacobian][cone]") {
+    Eigen::MatrixXd cp;
+    autogen::p_nodes_3d(3,cp);
+    cp.row(4)=cp.row(0);
+    cp.row(9)=cp.row(0);
+    std::vector<basis::ElementBases> bs{cone_test_basis(cp)};
+    const Eigen::VectorXd zero=Eigen::VectorXd::Zero(60);
+    utils::DegenerateTets metadata(1);
+    metadata[0].vertex=0;
+    metadata[0].near_nodes={4,9};
+    CHECK_FALSE(std::get<0>(utils::is_valid(3,bs,bs,zero,0,1000)));
+    CHECK(std::get<0>(utils::is_valid(3,bs,bs,zero,0,1000,metadata)));
+    CHECK(utils::count_invalid(3,bs,bs,zero,1000,metadata).empty());
+    Eigen::VectorXd translation=Eigen::VectorXd::Constant(60,0.125);
+    CHECK(std::get<0>(utils::max_time_step(3,bs,bs,zero,translation,1e-5,0,1000,metadata))>=1.0);
+    // Reflection keeps the declared corner zeros but reverses orientation.
+    Eigen::VectorXd inverted=zero;
+    for(int i=0;i<20;++i) inverted[3*i]=-2*cp(i,0);
+    CHECK_FALSE(std::get<0>(utils::is_valid(3,bs,bs,inverted,0,1000,metadata)));
+    CHECK(std::get<0>(utils::max_time_step(3,bs,bs,zero,inverted,1e-5,0,1000,metadata))<0.51);
+    // A first collapse at t=1 marks only the terminal space-time vertex.
+    Eigen::MatrixXd regular;
+    autogen::p_nodes_3d(3,regular);
+    std::vector<basis::ElementBases> regular_bs{cone_test_basis(regular)};
+    Eigen::VectorXd collapse=zero;
+    for(int i : {4,9}) collapse.segment<3>(3*i)=-regular.row(i).transpose();
+    CHECK(std::get<0>(utils::max_time_step(3,regular_bs,regular_bs,zero,collapse,1e-5,0,1000,metadata))>=1.0);
+    // A metadata file cannot turn a separated control point into a zero.
+    Eigen::VectorXd separated=zero;
+    separated[4*3]=-0.25;
+    CHECK_FALSE(std::get<0>(utils::is_valid(3,bs,bs,separated,0,1000,metadata)));
+}
+#endif
+
+#ifdef POLYFEM_WITH_MISO
+TEST_CASE("conservative conversion preserves curved Lagrange geometry", "[jacobian][cone]") {
+    Eigen::MatrixXd uv;
+    autogen::p_nodes_3d(3,uv);
+    auto cp=uv;
+    cp.col(0).array() += 0.25*uv.col(0).array()*uv.col(1).array();
+    auto element=cone_test_basis(cp);
+    for(int i=0;i<20;++i) {
+        element.bases[i].set_basis([i](const Eigen::MatrixXd &x,Eigen::MatrixXd &v) {
+            autogen::p_basis_value_3d(false,3,i,x,v);
+        });
+        element.bases[i].set_grad([i](const Eigen::MatrixXd &x,Eigen::MatrixXd &v) {
+            autogen::p_grad_basis_value_3d(false,3,i,x,v);
+        });
+    }
+    std::vector<basis::ElementBases> bs{element};
+    CHECK(std::get<0>(utils::is_valid(3,bs,bs,Eigen::VectorXd::Zero(60),0,1000)));
+    Eigen::VectorXd flip=Eigen::VectorXd::Zero(60);
+    for(int i=0;i<20;++i) flip[3*i]=-2*cp(i,0);
+    CHECK_FALSE(std::get<0>(utils::is_valid(3,bs,bs,flip,0,1000)));
+    // Linear geometry and cubic displacement require Bernstein degree elevation.
+    std::vector<basis::ElementBases> linear{make_linear_simplex_basis(3)};
+    std::vector<basis::ElementBases> cubic{cone_test_basis(uv)};
+    CHECK(std::get<0>(utils::is_valid(3,cubic,linear,Eigen::VectorXd::Constant(60,0.125),0,1000)));
+}
+#endif
+
+#ifdef POLYFEM_WITH_MISO
+TEST_CASE("extract_nodes samples Bernstein geometry rather than returning controls", "[jacobian][cone]") {
+    Eigen::MatrixXd controls;
+    autogen::p_nodes_3d(3, controls);
+    controls.row(4) = controls.row(0);
+    const auto element = cone_test_basis(controls);
+    const Eigen::VectorXd zero = Eigen::VectorXd::Zero(60);
+    const auto sampled = utils::extract_nodes(3, element, element, zero, 3);
+    // At t=1/3: B0*0 + B1*0 + B2*(2/3) + B3*1 = 5/27.
+    CHECK(controls(4, 0) == 0);
+    CHECK(sampled(4, 0) == Catch::Approx(5.0 / 27.0));
+    std::vector<basis::ElementBases> elements{element};
+    const auto batch = utils::extract_nodes(3, elements, elements, zero, 3);
+    CHECK(batch.isApprox(sampled));
+}
+#endif
+
+#ifdef POLYFEM_WITH_MISO
+#include <polyfem/solver/forms/ElasticForm.hpp>
+#include <polyfem/assembler/AMIPSEnergy.hpp>
+
+TEST_CASE("ElasticForm integrates marked cones with interior quadrature", "[jacobian][cone][cone_quadrature]") {
+    Eigen::MatrixXd cp;
+    autogen::p_nodes_3d(3, cp);
+    std::vector<basis::ElementBases> bs{cone_test_basis(cp)};
+    const auto geometry = bs;
+    assembler::AMIPSEnergy amips;
+    amips.set_size(3);
+    amips.add_multimaterial(0, json{{"use_rest_pose", true}}, Units(), "");
+    assembler::AssemblyValsCache cache;
+    cache.init_empty(false);
+    solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
+                         solver::ElementInversionCheck::Conservative, 1000);
+    cache.init(true, bs, geometry);
+    Eigen::VectorXd u = Eigen::VectorXd::Zero(60);
+    u.segment<3>(12) = -cp.row(4).transpose();
+    u.segment<3>(27) = -cp.row(9).transpose();
+    CHECK_FALSE(std::isfinite(form.value(u)));
+    const auto path = std::filesystem::temp_directory_path() / "polyfem_cone_quadrature_test.txt";
+    struct Cleanup { std::filesystem::path p; ~Cleanup(){std::filesystem::remove(p);} } cleanup{path};
+    { std::ofstream out(path); out << "0 4\n0 9\n"; }
+    Eigen::VectorXi mapping = Eigen::VectorXi::LinSpaced(20, 0, 19);
+    form.load_degenerate_edges(path.string(), mapping);
+    auto check = [&]() {
+        quadrature::Quadrature q;
+        bs[0].compute_quadrature(q);
+        CHECK(q.points.minCoeff() > 0);
+        CHECK(q.points.rowwise().sum().maxCoeff() < 1);
+        CHECK(q.weights.minCoeff() > 0);
+        CHECK(q.weights.sum() == Catch::Approx(1.0 / 6.0));
+        CHECK(std::isfinite(form.value(u)));
+        Eigen::VectorXd gradient;
+        form.first_derivative(u, gradient);
+        CHECK(gradient.allFinite());
+        CHECK(form.is_step_collision_free(u, u));
+    };
+    check();
+    quadrature::Quadrature before, after;
+    bs[0].compute_quadrature(before);
+    Eigen::VectorXd trial = u;
+    trial[16 * 3 + 2] += 3;
+    CHECK(form.max_step_size(u, trial) < 1);
+    const json info = json::object();
+    const Eigen::VectorXd zero = Eigen::VectorXd::Zero(60);
+    form.post_step(polysolve::nonlinear::PostStepData(0, info, u, zero));
+    bs[0].compute_quadrature(after);
+    CHECK(after.size() > before.size());
+    check();
+    form.load_degenerate_edges("", mapping);
+    CHECK_FALSE(std::isfinite(form.value(u)));
+}
+#endif

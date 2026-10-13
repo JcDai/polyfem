@@ -6,6 +6,16 @@
 
 namespace polyfem::utils
 {
+    // One isolated cone per tet. Entries in near_nodes are local Bezier indices.
+    struct DegenerateTet {
+        int vertex = -1;
+        std::vector<int> near_nodes;
+    };
+    using DegenerateTets = std::vector<DegenerateTet>;
+    DegenerateTets read_degenerate_edges(const std::string &path,
+        const Eigen::VectorXi &input_to_node,
+        const std::vector<basis::ElementBases> &bases);
+
 	class Tree
 	{
 	public:
@@ -103,7 +113,8 @@ namespace polyfem::utils
 		const std::vector<basis::ElementBases> &bases,
 		const std::vector<basis::ElementBases> &gbases,
 		const Eigen::VectorXd &u,
-		const unsigned max_iter = 1'000'000);
+		const unsigned max_iter = 1'000'000,
+        const DegenerateTets &degenerate = {});
 
 	std::tuple<bool, int, Tree> is_valid(
 		const int dim,
@@ -111,7 +122,8 @@ namespace polyfem::utils
 		const std::vector<basis::ElementBases> &gbases,
 		const Eigen::VectorXd &u,
 		const double threshold = 0,
-		const unsigned max_iter = 1'000'000);
+		const unsigned max_iter = 1'000'000,
+        const DegenerateTets &degenerate = {});
 
 	std::tuple<double, int, double, Tree> max_time_step(
 		const int dim,
@@ -121,7 +133,8 @@ namespace polyfem::utils
 		const Eigen::VectorXd &u2,
 		double precision = .25,
 		double threshold = 0,
-		const unsigned max_iter = 1'000'000);
+		const unsigned max_iter = 1'000'000,
+        const DegenerateTets &degenerate = {});
 
 	Eigen::MatrixXd extract_nodes(const int dim, const basis::ElementBases &basis, const basis::ElementBases &gbasis, const Eigen::VectorXd &u, int order);
 	Eigen::MatrixXd extract_nodes(const int dim, const std::vector<basis::ElementBases> &bases, const std::vector<basis::ElementBases> &gbases, const Eigen::VectorXd &u, int order, int n_elem = -1);

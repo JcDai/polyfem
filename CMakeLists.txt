@@ -275,7 +275,18 @@ target_link_libraries(polyfem PUBLIC paraviewo::paraviewo)
 # Jacobian
 if(POLYFEM_WITH_MISO)
     include(hocgv_miso)
-    target_link_libraries(polyfem PRIVATE miso)
+    # Only the Jacobian implementation consumes MISO's C++23 headers.
+    # Keep the rest of PolyFEM and its legacy dependency headers in C++17.
+    target_link_libraries(polyfem PRIVATE "$<LINK_ONLY:miso>")
+    target_include_directories(polyfem PRIVATE $<TARGET_PROPERTY:miso,INTERFACE_INCLUDE_DIRECTORIES>)
+    set_property(SOURCE src/polyfem/utils/Jacobian.cpp APPEND PROPERTY COMPILE_OPTIONS
+        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-std=c++23>"
+        "$<$<CXX_COMPILER_ID:MSVC>:/std:c++latest>")
+    if(APPLE)
+        set_property(SOURCE src/polyfem/utils/Jacobian.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            _LIBCPP_ENABLE_CXX20_REMOVED_ALLOCATOR_MEMBERS
+            _LIBCPP_ENABLE_CXX20_REMOVED_ALLOCATOR_VOID_SPECIALIZATION)
+    endif()
     target_compile_definitions(polyfem PUBLIC POLYFEM_WITH_MISO)
 endif()
 

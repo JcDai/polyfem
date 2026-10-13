@@ -46,6 +46,10 @@ namespace polyfem::solver
 					const ElementInversionCheck check_inversion = ElementInversionCheck::Discrete,
 					const unsigned conservative_max_iter = 100000);
 
+        const utils::DegenerateTets &degenerate_tets() const { return degenerate_tets_; }
+
+        void load_degenerate_edges(const std::string &path, const Eigen::VectorXi &input_to_node);
+
 		std::string name() const override { return "elastic"; }
 
 	protected:
@@ -113,6 +117,7 @@ namespace polyfem::solver
 		const double jacobian_threshold_;
 		const ElementInversionCheck check_inversion_;
 		const unsigned conservative_max_iter_;
+        utils::DegenerateTets degenerate_tets_;
 		const double dt_;
 		const bool is_volume_;
 

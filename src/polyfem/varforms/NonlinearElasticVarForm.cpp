@@ -1,3 +1,4 @@
+#include <polyfem/solver/forms/ElasticForm.hpp>
 #include "NonlinearElasticVarForm.hpp"
 
 #include <polyfem/assembler/AssemblerUtils.hpp>
@@ -336,6 +337,13 @@ namespace polyfem::varform
 					mesh, n_bases - obstacle.n_vertices(), bases, geom_bases, total_local_boundary,
 					collision_vertices, collision_edges, collision_triangles, displacement_map_entries);
 			}
+			else if (args.at("/space/basis_type"_json_pointer) == "Bernstein")
+			{
+				io::OutGeometryData::extract_boundary_mesh_sampled(
+					mesh, n_bases - obstacle.n_vertices(), bases, total_local_boundary,
+					collision_vertices, collision_edges, collision_triangles, displacement_map_entries,
+					0, &geom_bases);
+			}
 			else if (args.at("/space/basis_type"_json_pointer) == "Spline")
 			{
 				io::OutGeometryData::extract_boundary_mesh_sampled(
@@ -385,7 +393,8 @@ namespace polyfem::varform
 					io::OutGeometryData::extract_boundary_mesh_sampled(
 						mesh, n_bases - obstacle.n_vertices(), bases, total_local_boundary,
 						collision_vertices, collision_edges, collision_triangles, displacement_map_entries,
-						utils::json_value<int>(collision_mesh_args, "sampling_order", 0));
+						utils::json_value<int>(collision_mesh_args, "sampling_order", 0),
+						args.at("/space/basis_type"_json_pointer) == "Bernstein" ? &geom_bases : nullptr);
 				}
 			}
 			else if (collision_mesh_args.contains("max_edge_length"))
@@ -878,6 +887,14 @@ namespace polyfem::varform
 			mesh_.get(), &boundary_.total_local_boundary,
 			args["boundary_conditions"]["periodic"], /*fe_space_id=*/-1);
 
+        const std::string degenerate_file = args["solver"]["advanced"].value("degenerate_edges", std::string());
+        if (!degenerate_file.empty() && check_inversion != ElementInversionCheck::Discrete) {
+            if (args["space"].value("basis_type", std::string("Lagrange")) != "Bernstein")
+                log_and_throw_error("Degenerate edge metadata requires space.basis_type = Bernstein");
+            solve_data_.elastic_form->load_degenerate_edges(
+                utils::resolve_path(degenerate_file, args.value("root_path", std::string()), false), space_.space_in_node_to_node);
+        }
+
 		for (const auto &form : forms)
 			form->set_output_dir(output_path);
 
@@ -1105,7 +1122,8 @@ namespace polyfem::varform
 
 		if (args["space"]["advanced"]["count_flipped_els_continuous"])
 		{
-			const auto invalidList = utils::count_invalid(mesh_->dimension(), space_.basis_list(), space_.geometry_basis_list(), sol);
+			const auto invalidList = utils::count_invalid(mesh_->dimension(), space_.basis_list(), space_.geometry_basis_list(), sol,
+                args["solver"]["advanced"]["conservative_max_iter"], solve_data_.elastic_form->degenerate_tets());
 			logger().debug("Flipped elements (cnt {}) : {}", invalidList.size(), invalidList);
 		}
 

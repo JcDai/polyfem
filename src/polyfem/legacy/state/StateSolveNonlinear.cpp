@@ -1,3 +1,4 @@
+#include <polyfem/utils/StringUtils.hpp>
 #include <polyfem/legacy/State.hpp>
 
 #include <polyfem/assembler/Mass.hpp>
@@ -322,6 +323,14 @@ namespace polyfem::legacy
 			// Boundary-ID periodic constraints
 			mesh.get(), &total_local_boundary,
 			args["boundary_conditions"]["periodic"], /*fe_space_id=*/-1);
+
+        const std::string degenerate_file = args["solver"]["advanced"].value("degenerate_edges", std::string());
+        if (!degenerate_file.empty() && check_inversion != ElementInversionCheck::Discrete) {
+            if (args["space"].value("basis_type", std::string("Lagrange")) != "Bernstein")
+                log_and_throw_error("Degenerate edge metadata requires space.basis_type = Bernstein");
+            solve_data.elastic_form->load_degenerate_edges(
+                utils::resolve_path(degenerate_file, args.value("root_path", std::string()), false), in_node_to_node);
+        }
 
 		for (const auto &form : forms)
 			form->set_output_dir(output_dir);

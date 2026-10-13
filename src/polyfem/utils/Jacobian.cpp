@@ -1,4 +1,8 @@
 #include <numeric>
+#include <cstdlib>
+#include <fstream>
+#include <set>
+#include <map>
 #include <polyfem/utils/Logger.hpp>
 #include <polyfem/utils/par_for.hpp>
 #include "Jacobian.hpp"
@@ -7,6 +11,7 @@
 
 #ifdef POLYFEM_WITH_MISO
 #include "EigenAdapters.hpp"
+#include "MisoBezier.hpp"
 #include <algorithms/solve.hpp>
 #include <algorithms/minimize.hpp>
 #include <algorithms/batch-minimize.hpp>
@@ -17,6 +22,65 @@ using namespace polyfem::assembler;
 
 namespace polyfem::utils
 {
+    DegenerateTets read_degenerate_edges(const std::string &path,
+        const Eigen::VectorXi &input_to_node,
+        const std::vector<basis::ElementBases> &bases)
+    {
+        if (path.empty()) return {};
+        std::ifstream file(path);
+        if (!file) throw std::runtime_error("Cannot read degenerate edges: " + path);
+        std::set<std::pair<int, int>> edges;
+        std::string line;
+        int number = 0;
+        while (std::getline(file, line)) {
+            ++number;
+            if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
+            std::istringstream row(line);
+            int a, b;
+            std::string extra;
+            if (!(row >> a >> b) || (row >> extra) || a < 0 || b < 0 || a == b ||
+                a >= input_to_node.size() || b >= input_to_node.size())
+                throw std::runtime_error("Invalid degenerate edge at " + path + ":" + std::to_string(number));
+            a = input_to_node[a]; b = input_to_node[b];
+            if (a < 0 || b < 0 || a == b)
+                throw std::runtime_error("Degenerate edge has no distinct PolyFEM node mapping");
+            edges.emplace(a, b);
+        }
+        if (edges.empty()) return {};
+        std::set<std::pair<int, int>> found;
+        DegenerateTets result(bases.size());
+        constexpr int near[4][4] = {{-1,4,9,10}, {5,-1,6,12}, {8,7,-1,14}, {11,13,15,-1}};
+        for (size_t e = 0; e < bases.size(); ++e) {
+            const auto &bs = bases[e].bases;
+            if (bs.size() != 20 || bs.front().order() != 3)
+                throw std::runtime_error("Degenerate edges require uniform cubic tetrahedra");
+            auto id = [&](int i) {
+                const auto &g = bs[i].global();
+                if (g.size() != 1 || g[0].val != 1)
+                    throw std::runtime_error("Degenerate edges require unconstrained node numbering");
+                return g[0].index;
+            };
+            for (int v = 0; v < 4; ++v) {
+                for (int w = 0; w < 4; ++w) {
+                    if (v == w) continue;
+                    const auto pair = std::make_pair(id(v), id(near[v][w]));
+                    if (!edges.count(pair)) continue;
+                    auto &d = result[e];
+                    if (d.vertex >= 0 && d.vertex != v)
+                        throw std::runtime_error("Multiple isolated degenerate corners in one tet are unsupported");
+                    d.vertex = v;
+                    d.near_nodes.push_back(near[v][w]);
+                    found.insert(pair);
+                }
+            }
+            if (result[e].near_nodes.size() > 2)
+                throw std::runtime_error("Three collapsed directions require unsupported order-3 degeneracy");
+        }
+        if (found != edges)
+            throw std::runtime_error("Degenerate edge is not a cone-to-near-control-point edge of a cubic tet");
+        return result;
+    }
+
 	Eigen::MatrixXd extract_nodes(const int dim, const std::vector<basis::ElementBases> &bases, const std::vector<basis::ElementBases> &gbases, const Eigen::VectorXd &u, int order, int n_elem)
 	{
 		if (n_elem < 0)
@@ -99,6 +163,30 @@ namespace polyfem::utils
 #ifdef POLYFEM_WITH_MISO
 	namespace
 	{
+		// Diagnostic only: MISO expects Bernstein coefficients, whereas the old
+		// extract_nodes API returns interpolation-point samples.
+		miso_detail::BezierData extract_check_data(int dim,
+			const std::vector<basis::ElementBases> &bases,
+			const std::vector<basis::ElementBases> &gbases,
+			const Eigen::VectorXd &u, int order)
+		{
+			static const bool use_samples = [] {
+				const char *mode = std::getenv("POLYFEM_EXPERIMENT_EXTRACT_NODES");
+				const bool enabled = mode && std::string(mode) == "1";
+				if (enabled)
+					logger().warn("EXPERIMENT: conservative checks use extract_nodes samples as MISO coefficients");
+				return enabled;
+			}();
+			if (!use_samples)
+				return miso_detail::extract_bezier(dim, bases, gbases, u, order);
+			const Eigen::MatrixXd samples = extract_nodes(dim, bases, gbases, u, order, -1);
+			miso_detail::BezierData result{miso_detail::Matrix(samples.rows(), std::vector<miso::Real>(dim))};
+			for (int i = 0; i < samples.rows(); ++i)
+				for (int d = 0; d < dim; ++d)
+					result.rows[i][d] = miso::Real(samples(i, d));
+			return result;
+		}
+
 		void build_tree(Tree &tree, const std::vector<unsigned> &path, unsigned n_spatial)
 		{
 			// Space-time child i maps to spatial child i/2 (even=lower t, odd=upper t).
@@ -124,14 +212,15 @@ namespace polyfem::utils
 		const std::vector<basis::ElementBases> &bases,
 		const std::vector<basis::ElementBases> &gbases,
 		const Eigen::VectorXd &u,
-		const unsigned max_iter)
+		const unsigned max_iter,
+        const DegenerateTets &degenerate)
 	{
 		std::vector<int> invalidList;
 #ifdef POLYFEM_WITH_MISO
-		RealInterval::init();
+		miso_detail::IntervalScope interval_scope;
 		const int order = std::max(bases[0].bases.front().order(), gbases[0].bases.front().order());
 		const int n_per = std::max(bases[0].bases.size(), gbases[0].bases.size());
-		const Eigen::MatrixXd cp = extract_nodes(dim, bases, gbases, u, order);
+		const auto cp = extract_check_data(dim, bases, gbases, u, order);
 		const int n_elem = static_cast<int>(bases.size());
 
 		auto run_solve = [&](auto problem, int e) {
@@ -143,7 +232,7 @@ namespace polyfem::utils
 			auto sols = solve(std::move(problem), params, &info);
 			if (!info.success())
 				logger().warn("Jacobian solve gave up at element {} after {} iterations", e, info.numIterations);
-			return !sols.empty();
+			return !info.success() || !sols.empty();
 		};
 
 		for (int e = 0; e < n_elem; ++e)
@@ -181,7 +270,7 @@ namespace polyfem::utils
 					invalid = run_solve(make_p2tet_val(cp, o), e);
 					break;
 				case 3:
-					invalid = run_solve(make_p3tet_val(cp, o), e);
+					invalid = run_solve(miso_detail::mark(make_p3tet_val(cp, o), cp, nullptr, o, e, degenerate), e);
 					break;
 				default:
 					throw std::invalid_argument("Order not supported");
@@ -190,7 +279,6 @@ namespace polyfem::utils
 			if (invalid)
 				invalidList.push_back(e);
 		}
-		RealInterval::deinit();
 #else
 		log_and_throw_error("Enable Bezier or Miso library to allow robust Jacobian check!");
 #endif
@@ -204,13 +292,14 @@ namespace polyfem::utils
 		const std::vector<basis::ElementBases> &gbases,
 		const Eigen::VectorXd &u,
 		const double threshold,
-		const unsigned max_iter)
+		const unsigned max_iter,
+        const DegenerateTets &degenerate)
 	{
 #ifdef POLYFEM_WITH_MISO
-		RealInterval::init();
+		miso_detail::IntervalScope interval_scope;
 		const int order = std::max(bases[0].bases.front().order(), gbases[0].bases.front().order());
 		const int n_per = std::max(bases[0].bases.size(), gbases[0].bases.size());
-		const Eigen::MatrixXd cp = extract_nodes(dim, bases, gbases, u, order);
+		const auto cp = extract_check_data(dim, bases, gbases, u, order);
 		const int n_elem = static_cast<int>(bases.size());
 
 		auto run_solve = [threshold, max_iter](auto problem, int e) {
@@ -225,7 +314,7 @@ namespace polyfem::utils
 				logger().warn("Jacobian solve gave up at element {} after {} iterations", e, info.numIterations);
 				return true; // ambiguous counts as invalid
 			}
-			return !sols.empty();
+			return !info.success() || !sols.empty();
 		};
 
 		for (int e = 0; e < n_elem; ++e)
@@ -263,7 +352,7 @@ namespace polyfem::utils
 					invalid = run_solve(make_p2tet_val(cp, o), e);
 					break;
 				case 3:
-					invalid = run_solve(make_p3tet_val(cp, o), e);
+					invalid = run_solve(miso_detail::mark(make_p3tet_val(cp, o), cp, nullptr, o, e, degenerate), e);
 					break;
 				default:
 					throw std::invalid_argument("Order not supported");
@@ -271,11 +360,9 @@ namespace polyfem::utils
 			}
 			if (invalid)
 			{
-				RealInterval::deinit();
 				return {false, e, Tree{}};
 			}
 		}
-		RealInterval::deinit();
 		return {true, -1, Tree{}};
 #else
 		log_and_throw_error("Enable Bezier or Miso library to allow robust Jacobian check!");
@@ -291,14 +378,15 @@ namespace polyfem::utils
 		const Eigen::VectorXd &u2,
 		double precision,
 		double threshold,
-		const unsigned max_iter)
+		const unsigned max_iter,
+        const DegenerateTets &degenerate)
 	{
 #ifdef POLYFEM_WITH_MISO
-		RealInterval::init();
+		miso_detail::IntervalScope interval_scope;
 		const int order = std::max(bases[0].bases.front().order(), gbases[0].bases.front().order());
 		const int n_per = std::max(bases[0].bases.size(), gbases[0].bases.size());
-		const Eigen::MatrixXd cp1 = extract_nodes(dim, bases, gbases, u1, order);
-		const Eigen::MatrixXd cp2 = extract_nodes(dim, bases, gbases, u2, order);
+		const auto cp1 = extract_check_data(dim, bases, gbases, u1, order);
+		const auto cp2 = extract_check_data(dim, bases, gbases, u2, order);
 		const int n_elem = static_cast<int>(bases.size());
 
 		double step = 1.0;
@@ -375,14 +463,13 @@ namespace polyfem::utils
 				run_batch([&](int o) { return make_p2tet_cgv(cp1, cp2, o); });
 				break;
 			case 3:
-				run_batch([&](int o) { return make_p3tet_cgv(cp1, cp2, o); });
+				run_batch([&](int o) { return miso_detail::mark(make_p3tet_cgv(cp1, cp2, o), cp1, &cp2, o, o / n_per, degenerate); });
 				break;
 			default:
 				throw std::invalid_argument("Order not supported");
 			}
 		}
 
-		RealInterval::deinit();
 		return {step, invalid_id, invalid_step, tree};
 #else
 		log_and_throw_error("Enable Bezier or Miso library to allow robust Jacobian check!");
