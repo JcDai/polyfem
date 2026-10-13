@@ -308,3 +308,64 @@ TEST_CASE("spline contact builds a displacement map", "[build_collision_proxy]")
 		Eigen::MatrixXd::Zero(debug.n_bases, debug.mesh->dimension()));
 	CHECK(mapped_displacements.rows() == output_space.collision_mesh->rest_positions().rows());
 }
+
+TEST_CASE("Bernstein 2D collision mesh evaluates Lagrange samples", "[collision_proxy][bernstein]")
+{
+	polyfem::json args = {
+		{"geometry", {{{"mesh", ""}}}},
+		{"materials", {{"type", "NeoHookean"}, {"E", 1e5}, {"nu", 0.3}, {"rho", 1e3}}},
+		{"space", {{"discr_order", 3}, {"basis_type", "Bernstein"}}},
+		{"contact", {{"enabled", true}, {"dhat", 0.01}}},
+		{"output", {{"log", {{"level", "warning"}}}}}};
+	const int sampling_order = GENERATE(-1, 0, 1, 6, 10);
+	if (sampling_order >= 0)
+		args["contact"]["collision_mesh"] = {{"enabled", true}, {"tessellation_type", "max_order"}, {"sampling_order", sampling_order}};
+	const int segments = sampling_order > 0 ? sampling_order : 3;
+	polyfem::State state;
+	state.init(args, true);
+	Eigen::MatrixXd V(3, 2);
+	V << 0, 0, 1, 0, 0, 1;
+	Eigen::MatrixXi F(1, 3);
+	F << 0, 1, 2;
+	state.load_mesh(V, F);
+	polyfem::test::VarFormTestAccess::prepare(*state.variational_formulation);
+	const auto debug = polyfem::test::VarFormTestAccess::debug_data(*state.variational_formulation);
+	const auto output = state.variational_formulation->output_space();
+	REQUIRE(output.collision_mesh != nullptr);
+	const auto &collision = *output.collision_mesh;
+	REQUIRE(collision.num_vertices() == 3 * segments);
+	CHECK(collision.num_edges() == 3 * segments);
+	CHECK(collision.num_faces() == 0);
+
+	// Perturb only the Bernstein coefficient at (1/3, 0). Along the bottom
+	// edge its cubic basis is 3*t*(1-t)^2, not a nodal hat function.
+	Eigen::MatrixXd u = Eigen::MatrixXd::Zero(debug.n_bases, 2);
+	int control = -1;
+	for (const auto &b : debug.bases->front().bases)
+		if ((b.global().front().node.head<2>() - Eigen::RowVector2d(1.0 / 3, 0)).norm() < 1e-12)
+			control = b.global().front().index;
+	REQUIRE(control >= 0);
+	u(control, 1) = 1;
+	const Eigen::MatrixXd displaced = collision.displace_vertices(u);
+	int bottom_samples = 0;
+	for (int i = 0; i < collision.num_vertices(); ++i)
+	{
+		const double x = collision.rest_positions()(i, 0);
+		const double y = collision.rest_positions()(i, 1);
+		if (std::abs(y) < 1e-12)
+		{
+			++bottom_samples;
+			CHECK(displaced(i, 0) == Catch::Approx(x).margin(1e-12));
+			CHECK(displaced(i, 1) == Catch::Approx(3 * x * (1 - x) * (1 - x)).margin(1e-12));
+		}
+	}
+	CHECK(bottom_samples == segments + 1);
+
+	// Partition of unity: a uniform coefficient displacement translates
+	// every sampled collision vertex by exactly the same amount.
+	u.col(0).setConstant(0.2);
+	u.col(1).setConstant(-0.3);
+	const Eigen::MatrixXd translated = collision.displace_vertices(u);
+	for (int i = 0; i < collision.num_vertices(); ++i)
+		CHECK((translated.row(i) - collision.rest_positions().row(i) - Eigen::RowVector2d(0.2, -0.3)).norm() < 1e-12);
+}
