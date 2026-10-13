@@ -111,6 +111,8 @@ namespace polyfem::io
 		/// Parameters as in extract_boundary_mesh, plus:
 		/// @param[in] sampling_order explicit lattice order (0 = automatic:
 		/// the globally maximal element order); larger samples finer
+		/// @param[in] geom_bases optional independent geometry for rest positions;
+		/// required for non-isoparametric fields such as Bernstein displacement.
 		static void extract_boundary_mesh_sampled(
 			const mesh::Mesh &mesh,
 			const int n_bases,
@@ -120,7 +122,8 @@ namespace polyfem::io
 			Eigen::MatrixXi &boundary_edges,
 			Eigen::MatrixXi &boundary_triangles,
 			std::vector<Eigen::Triplet<double>> &displacement_map_entries,
-			const int sampling_order = 0);
+			const int sampling_order = 0,
+			const std::vector<basis::ElementBases> *geom_bases = nullptr);
 
 		/// @brief unitalize the ref element sampler
 		/// @param[in] mesh mesh

@@ -369,3 +369,84 @@ TEST_CASE("Bernstein 2D collision mesh evaluates Lagrange samples", "[collision_
 	for (int i = 0; i < collision.num_vertices(); ++i)
 		CHECK((translated.row(i) - collision.rest_positions().row(i) - Eigen::RowVector2d(0.2, -0.3)).norm() < 1e-12);
 }
+
+TEST_CASE("Bernstein 3D collision mesh evaluates a watertight sampled surface", "[collision_proxy][bernstein][3d]")
+{
+	const int sampling_order = GENERATE(-1, 0, 1, 6);
+	const int order = sampling_order > 0 ? sampling_order : 3;
+	polyfem::json args = {
+		{"geometry", {{{"mesh", ""}}}},
+		{"materials", {{"type", "NeoHookean"}, {"E", 1e5}, {"nu", 0.3}, {"rho", 1e3}}},
+		{"space", {{"discr_order", 3}, {"basis_type", "Bernstein"}}},
+		{"contact", {{"enabled", true}, {"dhat", 0.01}}},
+		{"output", {{"log", {{"level", "warning"}}}}}};
+	if (sampling_order >= 0)
+		args["contact"]["collision_mesh"] = {{"enabled", true}, {"tessellation_type", "max_order"}, {"sampling_order", sampling_order}};
+	polyfem::State state;
+	state.init(args, true);
+	state.set_max_threads(1);
+	Eigen::MatrixXd V(4, 3);
+	V << 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1;
+	Eigen::MatrixXi T(1, 4);
+	T << 0, 1, 2, 3;
+	state.load_mesh(V, T);
+	polyfem::test::VarFormTestAccess::prepare(*state.variational_formulation);
+	const auto debug = polyfem::test::VarFormTestAccess::debug_data(*state.variational_formulation);
+	const auto output = state.variational_formulation->output_space();
+	REQUIRE(output.collision_mesh != nullptr);
+	const auto &collision = *output.collision_mesh;
+	CHECK(collision.num_vertices() == 2 * order * order + 2);
+	CHECK(collision.num_faces() == 4 * order * order);
+	check_closed_surface_mesh(collision.rest_positions(), collision.faces(), 2, 1);
+	CHECK_FALSE(ipc::has_intersections(collision, collision.rest_positions()));
+
+	// A single cubic Bernstein edge coefficient has the analytic value
+	// 3*x*(1-x-y-z)^2 on the reference tetrahedron.
+	Eigen::MatrixXd u = Eigen::MatrixXd::Zero(debug.n_bases, 3);
+	int control = -1;
+	for (const auto &b : debug.bases->front().bases)
+		if ((b.global().front().node - Eigen::RowVector3d(1.0 / 3, 0, 0)).norm() < 1e-12)
+			control = b.global().front().index;
+	REQUIRE(control >= 0);
+	u(control, 2) = 1;
+	const Eigen::MatrixXd displaced = collision.displace_vertices(u);
+	for (int i = 0; i < collision.num_vertices(); ++i)
+	{
+		const Eigen::RowVector3d p = collision.rest_positions().row(i);
+		const double l0 = 1 - p.sum();
+		CHECK((displaced.row(i) - p - Eigen::RowVector3d(0, 0, 3 * p(0) * l0 * l0)).norm() < 1e-12);
+	}
+	u.rowwise() = Eigen::RowVector3d(0.2, -0.3, 0.4);
+	const Eigen::MatrixXd translated = collision.displace_vertices(u);
+	for (int i = 0; i < collision.num_vertices(); ++i)
+		CHECK((translated.row(i) - collision.rest_positions().row(i) - Eigen::RowVector3d(0.2, -0.3, 0.4)).norm() < 1e-12);
+
+	// Give the independent geometry a curved mapping x -> x + 0.2*x*y.
+	// FE displacements must still be evaluated in the original reference domain.
+	auto geometry = *debug.geometry_bases;
+	const auto original = geometry.front();
+	geometry.front().set_bases_func([original](const Eigen::MatrixXd &points, std::vector<polyfem::assembler::AssemblyValues> &values) {
+		original.evaluate_bases(points, values);
+		Eigen::MatrixXd physical_points;
+		original.eval_geom_mapping(points, physical_points);
+		for (size_t k = 0; k < original.bases.size(); ++k)
+		{
+			const auto &p = original.bases[k].global().front().node;
+			const double sign = p.norm() < 1e-12 ? -1 : (p - Eigen::RowVector3d(1, 0, 0)).norm() < 1e-12 ? 1 : 0;
+			values[k].val.col(0).array() += sign * 0.2 * physical_points.col(0).array() * physical_points.col(1).array();
+		}
+	});
+	Eigen::MatrixXd sampled;
+	Eigen::MatrixXi edges, faces;
+	std::vector<Eigen::Triplet<double>> entries;
+	polyfem::io::OutGeometryData::extract_boundary_mesh_sampled(
+		*debug.mesh, debug.n_bases, *debug.bases, *debug.total_local_boundary,
+		sampled, edges, faces, entries, order, &geometry);
+	REQUIRE(sampled.rows() == collision.num_vertices());
+	for (int i = 0; i < sampled.rows(); ++i)
+	{
+		Eigen::RowVector3d expected = collision.rest_positions().row(i);
+		expected(0) += 0.2 * expected(0) * expected(1);
+		CHECK((sampled.row(i) - expected).norm() < 1e-12);
+	}
+}

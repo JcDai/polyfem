@@ -571,7 +571,8 @@ namespace polyfem::io
 		Eigen::MatrixXi &boundary_edges,
 		Eigen::MatrixXi &boundary_triangles,
 		std::vector<Eigen::Triplet<double>> &displacement_map_entries,
-		const int sampling_order)
+		const int sampling_order,
+		const std::vector<basis::ElementBases> *geom_bases)
 	{
 		using namespace polyfem::mesh;
 
@@ -585,6 +586,8 @@ namespace polyfem::io
 		if (!mesh.is_volume() || mesh.has_poly()
 			|| !dynamic_cast<const Mesh3D &>(mesh).is_conforming())
 		{
+			if (geom_bases)
+				log_and_throw_error("Geometry-aware collision sampling requires a conforming volume mesh without polytopes.");
 			logger().warn("max_order collision-proxy sampling requires a conforming volume mesh without polytopes; falling back to the standard boundary extraction");
 			extract_boundary_mesh(mesh, n_bases, bases, total_local_boundary,
 								  node_positions, boundary_edges, boundary_triangles, displacement_map_entries);
@@ -755,6 +758,22 @@ namespace polyfem::io
 
 				std::vector<polyfem::assembler::AssemblyValues> vals;
 				b.evaluate_bases(pts, vals);
+				Eigen::MatrixXd mapped_positions;
+				if (geom_bases)
+				{
+					// The geometry may have a different basis/order than displacement.
+					// Avoid the rational pyramid apex singularity during evaluation.
+					Eigen::MatrixXd geometry_points = pts;
+					if (apex_node >= 0)
+						for (int s = 0; s < pts.rows(); ++s)
+							if (std::abs(pts(s, 2) - 1.0) < 1e-12)
+								geometry_points.row(s).setZero();
+					geom_bases->at(el).eval_geom_mapping(geometry_points, mapped_positions);
+					if (apex_node >= 0)
+						for (int s = 0; s < pts.rows(); ++s)
+							if (std::abs(pts(s, 2) - 1.0) < 1e-12)
+								mapped_positions.row(s) = mesh3d.point(mesh3d.get_ordered_vertices_from_pyramid(el).back());
+				}
 
 				const auto edge_key = [M](const int va, const int vb, const int step) {
 					return va < vb ? std::array<int, 4>{{1, va, vb, step}}
@@ -834,6 +853,8 @@ namespace polyfem::io
 								weights[g.index] += Ni * g.val;
 							}
 						}
+					if (geom_bases)
+						pos = mapped_positions.row(s).transpose();
 					assert(pos.allFinite());
 
 					const int vid = int(vertices.size());
