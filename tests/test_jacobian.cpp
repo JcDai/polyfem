@@ -1082,6 +1082,7 @@ TEST_CASE("jacobian extract nodes over element ranges", "[jacobian][utils]")
 #include <fstream>
 #include <filesystem>
 #include <polyfem/assembler/AMIPSEnergy.hpp>
+#include <polyfem/io/ResourceIO.hpp>
 #include <polyfem/assembler/AssemblyValsCache.hpp>
 #include <polyfem/quadrature/TetQuadrature.hpp>
 
@@ -1135,6 +1136,12 @@ namespace
 			if ((x.row(i) - q).cwiseAbs().maxCoeff() < 1e-12)
 				return i;
 		return -1;
+	}
+
+	const polyfem::io::ResourceIO &degenerate_test_resources()
+	{
+		static const polyfem::io::FileSystemIO resources(".");
+		return resources;
 	}
 
 	struct TempFile
@@ -1267,7 +1274,10 @@ TEST_CASE("cone split children", "[jacobian][degenerate]")
 		{
 			const Eigen::MatrixXd c = cone_nodes(3, v, i);
 			// The cut vertex keeps its row in every child.
-			CHECK(c.row(v) == (v == 0 ? Eigen::RowVector3d::Zero() : Eigen::RowVector3d::Unit(v - 1)));
+			Eigen::RowVector3d expected = Eigen::RowVector3d::Zero();
+			if (v > 0)
+				expected(v - 1) = 1;
+			CHECK(c.row(v) == expected);
 			Eigen::Matrix3d e;
 			for (int k = 0; k < 3; ++k)
 				e.row(k) = c.row(k + 1) - c.row(0);
@@ -1337,7 +1347,7 @@ TEST_CASE("ElasticForm integrates degenerate elements with interior quadrature",
 	const auto geometry = bs;
 	polyfem::assembler::AMIPSEnergy amips;
 	amips.set_size(3);
-	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), "");
+	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), degenerate_test_resources());
 	polyfem::assembler::AssemblyValsCache cache;
 	cache.init_empty(false);
 	polyfem::solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
@@ -1380,7 +1390,7 @@ TEST_CASE("ElasticForm refines degenerate elements along the continuous check", 
 	const auto geometry = bs;
 	polyfem::assembler::AMIPSEnergy amips;
 	amips.set_size(3);
-	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), "");
+	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), degenerate_test_resources());
 	polyfem::assembler::AssemblyValsCache cache;
 	cache.init_empty(false);
 	polyfem::solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
