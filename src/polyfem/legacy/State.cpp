@@ -8,6 +8,7 @@
 // the non-legacy OutData carries the hybrid (prism/pyramid) collision-proxy
 // construction; the collision mesh is built through it in both architectures
 #include <polyfem/io/OutData.hpp>
+#include <polyfem/io/ResourceIO.hpp>
 
 #include <polyfem/assembler/Mass.hpp>
 #include <polyfem/assembler/MultiModel.hpp>
@@ -626,13 +627,34 @@ namespace polyfem::legacy
 		if constexpr (true)
 #endif
 		{
+			// The conservative checks are backed by miso-generated solvers that
+			// only cover simplices (triangles P1-P4, tetrahedra P1-P3), so quad,
+			// hex, prism and pyramid meshes fall back to the discrete check.
+			// Say so: silently downgrading a requested guarantee is worse than
+			// refusing it, and scenes usually inherit this from a shared base.
+			if (args["solver"]["advanced"]["check_inversion"] != "Discrete")
+			{
+#ifdef POLYFEM_WITH_MISO
+				logger().warn(
+					"Conservative inversion check requested but the mesh is not simplicial; "
+					"falling back to \"Discrete\". Inversion between quadrature points will not be detected.");
+#else
+				logger().warn(
+					"Conservative inversion check requested but this build has POLYFEM_WITH_MISO=OFF; "
+					"falling back to \"Discrete\". Inversion between quadrature points will not be detected.");
+#endif
+			}
 			args["space"]["advanced"]["count_flipped_els_continuous"] = false;
 			args["output"]["paraview"]["options"]["jacobian_validity"] = false;
 			args["solver"]["advanced"]["check_inversion"] = "Discrete";
 		}
 		else if (args["solver"]["advanced"]["check_inversion"] != "Discrete")
 		{
-			args["space"]["advanced"]["use_corner_quadrature"] = true;
+			// With linear displacement and geometry the Jacobian is constant per
+			// element: the check still runs, but it never refines, and every rule
+			// gives the same elastic energy, so keep the cheaper standard one.
+			if (!(disc_orders.maxCoeff() == 1 && mesh->is_linear() && !args["space"]["use_p_ref"]))
+				args["space"]["advanced"]["use_corner_quadrature"] = true;
 		}
 
 		Eigen::MatrixXi geom_disc_orders;
@@ -810,7 +832,10 @@ namespace polyfem::legacy
 		}
 
 		if (args["constraints"].contains("macro_displacement_gradient"))
-			macro_strain_constraint.init(dim, args["constraints"]["macro_displacement_gradient"], root_path());
+		{
+			const polyfem::io::FileSystemIO resources(root_path());
+			macro_strain_constraint.init(dim, args["constraints"]["macro_displacement_gradient"], resources);
+		}
 
 		if (args["space"]["advanced"]["count_flipped_els"])
 			stats.count_flipped_elements(*mesh, geom_bases());
@@ -1344,11 +1369,13 @@ namespace polyfem::legacy
 				assert(displacement_map_entries.empty());
 				assert(collision_mesh_args.contains("mesh"));
 				const std::string root_path = utils::json_value<std::string>(args, "root_path", "");
+				const polyfem::io::FileSystemIO resources(root_path);
 				// TODO: handle transformation per geometry
 				const json transformation = json_as_array(args["geometry"])[0]["transformation"];
 				mesh::load_collision_proxy(
-					utils::resolve_path(collision_mesh_args["mesh"], root_path),
-					utils::resolve_path(collision_mesh_args["linear_map"], root_path),
+					resources,
+					collision_mesh_args["mesh"].get<std::string>(),
+					collision_mesh_args["linear_map"].get<std::string>(),
 					in_node_to_node, transformation, collision_vertices, collision_codim_vids,
 					collision_edges, collision_triangles, displacement_map_entries);
 			}
@@ -1564,7 +1591,7 @@ namespace polyfem::legacy
 			*assembler, *mesh, &obstacle,
 			dirichlet_nodes, neumann_nodes,
 			dirichlet_nodes_position, neumann_nodes_position,
-			n_bases_, size, bases_, geom_bases(), ass_vals_cache_, *problem,
+			n_bases_, size, bases_, geom_bases(), ass_vals_cache_, *problem, rhs_resources_,
 			args["space"]["advanced"]["bc_method"],
 			rhs_solver_params);
 	}
@@ -1611,7 +1638,8 @@ namespace polyfem::legacy
 			else
 				p_params["bbox_center"] = {delta(0), delta(1)};
 		}
-		problem->set_parameters(p_params, root_path());
+		const polyfem::io::FileSystemIO resources(root_path());
+		problem->set_parameters(p_params, resources);
 
 		rhs.resize(0, 0);
 

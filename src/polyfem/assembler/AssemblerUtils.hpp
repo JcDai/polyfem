@@ -53,7 +53,8 @@ namespace polyfem::assembler
 		AllElasticMaterials();
 
 		void set_size(const int size);
-		void add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path);
+		void set_use_robust_jacobian();
+		void add_multimaterial(const int index, const json &params, const Units &units, const io::ResourceIO &resources);
 		std::shared_ptr<assembler::ElasticityNLAssembler> get_assembler(const std::string &name) const;
 
 		std::map<std::string, Assembler::ParamFunc> parameters() const;

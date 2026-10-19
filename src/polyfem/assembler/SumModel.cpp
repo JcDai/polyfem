@@ -10,7 +10,7 @@
 
 namespace polyfem::assembler
 {
-	void SumModel::add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path)
+	void SumModel::add_multimaterial(const int index, const json &params, const Units &units, const io::ResourceIO &resources)
 	{
 		assert(size() == 2 || size() == 3);
 		if (params.count("models") == 0)
@@ -27,6 +27,9 @@ namespace polyfem::assembler
 				const std::string model_name = model["type"];
 
 				const auto assembler = AssemblerUtils::make_assembler(model_name);
+				if (use_robust_jacobian)
+					if (const auto elastic = std::dynamic_pointer_cast<ElasticityAssembler>(assembler))
+						elastic->set_use_robust_jacobian();
 				// cast assembler to elasticity assembler
 				assemblers_.emplace_back(std::dynamic_pointer_cast<NLAssembler>(assembler));
 				assert(assemblers_.back() != nullptr);
@@ -40,8 +43,18 @@ namespace polyfem::assembler
 			json model = models[i];
 			if (params.contains(MATERIAL_ELEMENT_INDEX))
 				model[MATERIAL_ELEMENT_INDEX] = params[MATERIAL_ELEMENT_INDEX];
-			assemblers_[i]->add_multimaterial(index, model, units, root_path);
+			assemblers_[i]->add_multimaterial(index, model, units, resources);
 		}
+	}
+
+	void SumModel::set_use_robust_jacobian()
+	{
+		// The models are created on the first add_multimaterial(), which
+		// forwards the flag to them; forward it here to any that exist already.
+		ElasticityAssembler::set_use_robust_jacobian();
+		for (const auto &assembler : assemblers_)
+			if (const auto elastic = std::dynamic_pointer_cast<ElasticityAssembler>(assembler))
+				elastic->set_use_robust_jacobian();
 	}
 
 	Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 3, 1>

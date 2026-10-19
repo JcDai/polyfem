@@ -1,6 +1,7 @@
 #pragma once
 
 #include <polyfem/Units.hpp>
+#include <polyfem/io/ResourceIO.hpp>
 
 #include <polyfem/assembler/AssemblerData.hpp>
 #include <polyfem/assembler/AssemblyValsCache.hpp>
@@ -188,8 +189,8 @@ namespace polyfem::assembler
 
 		virtual Eigen::Matrix<AutodiffScalarGrad, Eigen::Dynamic, 1, 0, 3, 1> kernel(const int dim, const AutodiffGradPt &rvect, const AutodiffScalarGrad &r) const { log_and_throw_error("Kernel not supported by {}!", name()); }
 
-		void set_materials(const std::vector<int> &body_ids, const json &body_params, const Units &units, const std::string &root_path);
-		virtual void add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path) {}
+		void set_materials(const std::vector<int> &body_ids, const json &body_params, const Units &units, const io::ResourceIO &resources);
+		virtual void add_multimaterial(const int index, const json &params, const Units &units, const io::ResourceIO &resources) {}
 
 		virtual void update_lame_params(const Eigen::MatrixXd &lambdas, const Eigen::MatrixXd &mus)
 		{
@@ -417,7 +418,9 @@ namespace polyfem::assembler
 		ElasticityAssembler() {}
 		virtual ~ElasticityAssembler() = default;
 
-		void set_use_robust_jacobian();
+		/// Evaluate det J in the energy as the conservative checks see it.
+		/// Composite models forward it to the models they are made of.
+		virtual void set_use_robust_jacobian();
 
 		// plotting (eg von mises), assembler is the name of the formulation
 		void compute_scalar_value(

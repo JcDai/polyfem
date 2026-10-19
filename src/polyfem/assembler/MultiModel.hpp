@@ -26,7 +26,9 @@ namespace polyfem::assembler
 		void set_size(const int size) override;
 
 		// inialize material parameter
-		void add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path) override;
+		void add_multimaterial(const int index, const json &params, const Units &units, const io::ResourceIO &resources) override;
+
+		void set_use_robust_jacobian() override;
 
 		// initialized multi models
 		inline void init_multimodels(const std::vector<std::string> &mats) { multi_material_models_ = mats; }
