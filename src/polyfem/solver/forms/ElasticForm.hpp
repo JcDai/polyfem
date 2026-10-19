@@ -68,6 +68,19 @@ namespace polyfem::solver
 
 		std::string name() const override { return "elastic"; }
 
+		/// @brief Allow known zeros of det J at element corners (see
+		/// utils::read_degenerate_edges for the file format). Requires a
+		/// conservative check and cubic Bernstein elements. Once a file with at
+		/// least one edge is loaded, every element is checked with the
+		/// degenerate solvers and integrated with an interior quadrature rule
+		/// of positive weights (utils::degenerate_quadrature), refined along
+		/// the checks' subdivisions. Call before the first solve.
+		/// @param input_to_node input mesh point row to polyfem node
+		void load_degenerate_edges(const std::string &path, const Eigen::VectorXi &input_to_node);
+
+		/// @brief Data of the degenerate checks, or null when not in use.
+		const utils::DegenerateMesh *degenerate() const { return degenerate_.get(); }
+
 	protected:
 		/// @brief Compute the elastic potential value
 		/// @param x Current solution
@@ -166,6 +179,15 @@ namespace polyfem::solver
 		/// @brief Rest positions of the control points (utils::rest_nodes),
 		/// computed once so every conservative check sees the same numbers.
 		Eigen::MatrixXd rest_nodes_;
+
+		/// @brief Degenerate checks (load_degenerate_edges), or null.
+		std::shared_ptr<const utils::DegenerateMesh> degenerate_;
+
+		/// @brief Throw if the rest state is not certified valid. Deferred to the
+		/// first check rather than done at construction, since degenerate
+		/// corners, loaded after construction, change what valid means.
+		void validate_rest() const;
+		mutable bool rest_validated_ = false;
 
 		mutable std::vector<utils::Tree> quadrature_hierarchy_;
 		int quadrature_order_;

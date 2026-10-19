@@ -1077,3 +1077,334 @@ TEST_CASE("jacobian extract nodes over element ranges", "[jacobian][utils]")
 		for (int c = 0; c < first_cp.cols(); ++c)
 			REQUIRE(first_cp(r, c) == Catch::Approx(all_cp(r, c)).margin(1e-12));
 }
+
+#ifdef POLYFEM_WITH_MISO
+#include <fstream>
+#include <filesystem>
+#include <polyfem/assembler/AMIPSEnergy.hpp>
+#include <polyfem/assembler/AssemblyValsCache.hpp>
+#include <polyfem/quadrature/TetQuadrature.hpp>
+
+namespace
+{
+	// One cubic Bernstein simplex with control points @p cp (polyfem node order).
+	polyfem::basis::ElementBases bernstein_p3_basis(const Eigen::MatrixXd &cp)
+	{
+		const int dim = cp.cols();
+		const int n = dim == 3 ? 20 : 10;
+		polyfem::basis::ElementBases result;
+		result.bases.resize(n);
+		for (int i = 0; i < n; ++i)
+		{
+			result.bases[i].init(3, i, i, cp.row(i));
+			result.bases[i].set_basis([i, dim](const Eigen::MatrixXd &uv, Eigen::MatrixXd &v) {
+				if (dim == 3)
+					polyfem::autogen::p_basis_value_3d(true, 3, i, uv, v);
+				else
+					polyfem::autogen::p_basis_value_2d(true, 3, i, uv, v);
+			});
+			result.bases[i].set_grad([i, dim](const Eigen::MatrixXd &uv, Eigen::MatrixXd &v) {
+				if (dim == 3)
+					polyfem::autogen::p_grad_basis_value_3d(true, 3, i, uv, v);
+				else
+					polyfem::autogen::p_grad_basis_value_2d(true, 3, i, uv, v);
+			});
+		}
+		return result;
+	}
+
+	Eigen::MatrixXd p3_nodes(const int dim)
+	{
+		Eigen::MatrixXd x;
+		if (dim == 3)
+			polyfem::autogen::p_nodes_3d(3, x);
+		else
+			polyfem::autogen::p_nodes_2d(3, x);
+		return x;
+	}
+
+	// Index of the P3 node at v + (w - v) / 3, with v, w vertex indices.
+	int near_node(const int dim, const int v, const int w)
+	{
+		const Eigen::MatrixXd x = p3_nodes(dim);
+		Eigen::MatrixXd ref = Eigen::MatrixXd::Zero(dim + 1, dim);
+		for (int k = 1; k <= dim; ++k)
+			ref(k, k - 1) = 1;
+		const Eigen::RowVectorXd q = ref.row(v) + (ref.row(w) - ref.row(v)) / 3.;
+		for (int i = 0; i < x.rows(); ++i)
+			if ((x.row(i) - q).cwiseAbs().maxCoeff() < 1e-12)
+				return i;
+		return -1;
+	}
+
+	struct TempFile
+	{
+		std::filesystem::path path;
+		explicit TempFile(const std::string &name) : path(std::filesystem::temp_directory_path() / name) {}
+		~TempFile() { std::filesystem::remove(path); }
+		void write(const std::string &text) const { std::ofstream(path) << text; }
+	};
+} // namespace
+
+TEST_CASE("degenerate edges remap input ids and validate directed edges", "[jacobian][degenerate]")
+{
+	const Eigen::MatrixXd cp = p3_nodes(3);
+	const std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(cp)};
+	Eigen::VectorXi mapping(20);
+	for (int i = 0; i < 20; ++i)
+		mapping[i] = 19 - i;
+	const TempFile file("polyfem_degenerate_edges_test.txt");
+	file.write("19 15\n19 10\n19 15\n");
+	const auto corners = read_degenerate_edges(file.path.string(), mapping, bs);
+	REQUIRE(corners.size() == 1);
+	CHECK(corners[0].vertex == 0);
+	CHECK(corners[0].near_nodes == std::vector<int>{4, 9});
+	for (const std::string bad : {"-1 3\n", "0 40\n", "19 18\n", "19 15 extra\n", "15 19\n"})
+	{
+		file.write(bad);
+		CHECK_THROWS(read_degenerate_edges(file.path.string(), mapping, bs));
+	}
+}
+
+TEST_CASE("degenerate corners are allowed at every vertex and order", "[jacobian][degenerate]")
+{
+	for (const int dim : {2, 3})
+		for (int vertex = 0; vertex <= dim; ++vertex)
+			for (int order = 1; order <= (dim == 3 ? 2 : 1); ++order)
+			{
+				CAPTURE(dim, vertex, order);
+				Eigen::MatrixXd cp = p3_nodes(dim);
+				std::vector<DegenerateCorner> corners(1);
+				corners[0].vertex = vertex;
+				for (int w = 0; w <= dim && (int)corners[0].near_nodes.size() < order; ++w)
+				{
+					if (w == vertex)
+						continue;
+					const int node = near_node(dim, vertex, w);
+					cp.row(node) = cp.row(vertex);
+					corners[0].near_nodes.push_back(node);
+				}
+				const std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(cp)};
+				const Eigen::VectorXd zero = Eigen::VectorXd::Zero(cp.size());
+				const DegenerateMesh unmarked = make_degenerate_mesh(dim, bs, bs, {});
+				const DegenerateMesh marked = make_degenerate_mesh(dim, bs, bs, corners);
+				// Unmarked, the zero at the corner cannot be certified.
+				CHECK_FALSE(std::get<0>(is_valid(dim, bs, bs, zero, 0, 1000, nullptr, &unmarked)));
+				CHECK(std::get<0>(is_valid(dim, bs, bs, zero, 0, 1000, nullptr, &marked)));
+				CHECK(count_invalid(dim, bs, bs, zero, 1000, nullptr, &marked).empty());
+				const Eigen::VectorXd translation = Eigen::VectorXd::Constant(cp.size(), 0.125);
+				CHECK(std::get<0>(max_time_step(dim, bs, bs, zero, translation, 1e-3, 0, 100000, nullptr, &marked)) >= 1.0);
+			}
+}
+
+TEST_CASE("degenerate checks detect inversion and require the collapse", "[jacobian][degenerate]")
+{
+	Eigen::MatrixXd cp = p3_nodes(3);
+	cp.row(4) = cp.row(0);
+	cp.row(9) = cp.row(0);
+	const std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(cp)};
+	const Eigen::VectorXd zero = Eigen::VectorXd::Zero(60);
+	std::vector<DegenerateCorner> corners(1);
+	corners[0].vertex = 0;
+	corners[0].near_nodes = {4, 9};
+	const DegenerateMesh m = make_degenerate_mesh(3, bs, bs, corners);
+
+	// A reflection keeps the collapse but reverses the orientation.
+	Eigen::VectorXd inverted = zero;
+	for (int i = 0; i < 20; ++i)
+		inverted[3 * i] = -2 * cp(i, 0);
+	CHECK_FALSE(std::get<0>(is_valid(3, bs, bs, inverted, 0, 100000, nullptr, &m)));
+	const double t = std::get<0>(max_time_step(3, bs, bs, zero, inverted, 1e-3, 0, 100000, nullptr, &m));
+	CHECK(t <= 0.5);
+	CHECK(t > 0.4);
+
+	// The collapse has to hold: a marked control point moved off its corner is an error.
+	Eigen::VectorXd separated = zero;
+	separated[4 * 3] = -0.25;
+	CHECK_THROWS(is_valid(3, bs, bs, separated, 0, 1000, nullptr, &m));
+	CHECK_THROWS(max_time_step(3, bs, bs, zero, separated, 1e-3, 0, 1000, nullptr, &m));
+}
+
+TEST_CASE("degenerate checks convert Lagrange and lower-order geometry exactly", "[jacobian][degenerate]")
+{
+	// Curved cubic Lagrange geometry with a Bernstein displacement.
+	const Eigen::MatrixXd uv = p3_nodes(3);
+	Eigen::MatrixXd x = uv;
+	x.col(0).array() += 0.25 * uv.col(0).array() * uv.col(1).array();
+	auto geometry = bernstein_p3_basis(x);
+	for (int i = 0; i < 20; ++i)
+	{
+		geometry.bases[i].set_basis([i](const Eigen::MatrixXd &p, Eigen::MatrixXd &v) { polyfem::autogen::p_basis_value_3d(false, 3, i, p, v); });
+		geometry.bases[i].set_grad([i](const Eigen::MatrixXd &p, Eigen::MatrixXd &v) { polyfem::autogen::p_grad_basis_value_3d(false, 3, i, p, v); });
+	}
+	const std::vector<polyfem::basis::ElementBases> gbs{geometry};
+	const std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(uv)};
+	const DegenerateMesh m = make_degenerate_mesh(3, bs, gbs, {});
+	CHECK(std::get<0>(is_valid(3, bs, gbs, Eigen::VectorXd::Zero(60), 0, 1000, nullptr, &m)));
+	Eigen::VectorXd flip = Eigen::VectorXd::Zero(60);
+	for (int i = 0; i < 20; ++i)
+		flip[3 * i] = -2 * x(i, 0);
+	CHECK_FALSE(std::get<0>(is_valid(3, bs, gbs, flip, 0, 1000, nullptr, &m)));
+
+	// Linear geometry: its Bernstein coefficients are degree-elevated.
+	const std::vector<polyfem::basis::ElementBases> linear{make_linear_simplex_basis(3)};
+	const DegenerateMesh ml = make_degenerate_mesh(3, bs, linear, {});
+	for (int i = 0; i < 20; ++i)
+		for (int d = 0; d < 3; ++d)
+		{
+			CHECK(ml.rest_lo(i, d) <= uv(i, d));
+			CHECK(ml.rest_hi(i, d) >= uv(i, d));
+			CHECK(ml.rest_hi(i, d) - ml.rest_lo(i, d) < 1e-14);
+		}
+}
+
+TEST_CASE("cone split children", "[jacobian][degenerate]")
+{
+	for (int v = 0; v < 4; ++v)
+	{
+		double volume = 0;
+		for (int i = 0; i < 4; ++i)
+		{
+			const Eigen::MatrixXd c = cone_nodes(3, v, i);
+			// The cut vertex keeps its row in every child.
+			CHECK(c.row(v) == (v == 0 ? Eigen::RowVector3d::Zero() : Eigen::RowVector3d::Unit(v - 1)));
+			Eigen::Matrix3d e;
+			for (int k = 0; k < 3; ++k)
+				e.row(k) = c.row(k + 1) - c.row(0);
+			volume += std::abs(e.determinant()) / 6;
+		}
+		CHECK(volume == Catch::Approx(1. / 6));
+	}
+
+	// A node split one way does not take a branch split another way.
+	Tree a, b;
+	a.add_children(8, subdivision::Uniform);
+	b.add_children(4, subdivision::cone(2));
+	b.child(0).add_children(8);
+	CHECK_FALSE(a.merge(b, 10));
+	CHECK(a.child(0).n_children() == 0);
+}
+
+TEST_CASE("degenerate witness is a quadrature point of the refined element", "[jacobian][degenerate]")
+{
+	// An inversion the check only finds after subdividing; the energy's
+	// quadrature refined along its witness must then have a point where det J
+	// is certainly non-positive (robust_evaluate_jacobian_bernstein gives NaN).
+	std::mt19937 rng(7);
+	std::uniform_real_distribution<double> U(-1, 1);
+	const Eigen::MatrixXd x = p3_nodes(3);
+	int checked = 0;
+	for (int trial = 0; trial < 200 && checked < 5; ++trial)
+	{
+		Eigen::MatrixXd cp = x;
+		for (int i = 4; i < 20; ++i)
+			for (int d = 0; d < 3; ++d)
+				cp(i, d) += 0.12 * U(rng);
+		const std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(cp)};
+		const DegenerateMesh m = make_degenerate_mesh(3, bs, bs, {});
+		const auto [valid, id, witness] = is_valid(3, bs, bs, Eigen::VectorXd::Zero(60), 0, 100000, nullptr, &m);
+		if (valid || witness.depth() < 2)
+			continue;
+		++checked;
+
+		Eigen::MatrixXd pts = Eigen::MatrixXd::Zero(4, 3);
+		for (int k = 1; k <= 3; ++k)
+			pts(k, k - 1) = 1;
+		const auto [leaves, exponents] = extract_subelement_volumes(pts, witness);
+		const auto rule = degenerate_quadrature(3);
+		Eigen::MatrixXd q(rule.size() * exponents.size(), 3);
+		for (size_t l = 0; l < exponents.size(); ++l)
+			for (int k = 0; k < rule.size(); ++k)
+			{
+				const Eigen::RowVectorXd mu = rule.points.row(k);
+				Eigen::RowVectorXd p = (1. - mu.sum()) * leaves.row(l * 4);
+				for (int j = 0; j < 3; ++j)
+					p += mu(j) * leaves.row(l * 4 + j + 1);
+				q.row(l * rule.size() + k) = p;
+			}
+		const ElementControlPoints c = degenerate_control_points(m, 0);
+		const Eigen::VectorXd j = robust_evaluate_jacobian_bernstein(c.rest, c.rest_hi, Eigen::MatrixXd::Zero(20, 3), q);
+		CAPTURE(trial, witness.depth());
+		CHECK(j.array().isNaN().any());
+	}
+	CHECK(checked > 0);
+}
+
+TEST_CASE("ElasticForm integrates degenerate elements with interior quadrature", "[jacobian][degenerate]")
+{
+	const Eigen::MatrixXd cp = p3_nodes(3);
+	std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(cp)};
+	const auto geometry = bs;
+	polyfem::assembler::AMIPSEnergy amips;
+	amips.set_size(3);
+	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), "");
+	polyfem::assembler::AssemblyValsCache cache;
+	cache.init_empty(false);
+	polyfem::solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
+									  polyfem::solver::ElementInversionCheck::ConservativeContinuous, 100000);
+	cache.init(true, bs, geometry);
+	// Collapse two edge control points onto vertex 0 through the displacement.
+	Eigen::VectorXd u = Eigen::VectorXd::Zero(60);
+	u.segment<3>(12) = -cp.row(4).transpose();
+	u.segment<3>(27) = -cp.row(9).transpose();
+	// The corner rule samples det J at the corner, where it vanishes.
+	CHECK_FALSE(std::isfinite(form.value(u)));
+
+	const TempFile file("polyfem_degenerate_quadrature_test.txt");
+	file.write("0 4\n0 9\n");
+	const Eigen::VectorXi mapping = Eigen::VectorXi::LinSpaced(20, 0, 19);
+	form.load_degenerate_edges(file.path.string(), mapping);
+	REQUIRE(form.degenerate() != nullptr);
+
+	polyfem::quadrature::Quadrature before;
+	bs[0].compute_quadrature(before);
+	CHECK(before.points.minCoeff() > 0);
+	CHECK(before.points.rowwise().sum().maxCoeff() < 1);
+	CHECK(before.weights.minCoeff() > 0);
+	CHECK(std::isfinite(form.value(u)));
+	Eigen::VectorXd gradient;
+	form.first_derivative(u, gradient);
+	CHECK(gradient.allFinite());
+
+	// The rest state is not collapsed although the corner is marked: the
+	// collapse has to hold in every configuration that is checked.
+	CHECK_THROWS(form.max_step_size(Eigen::VectorXd::Zero(60), u));
+}
+
+TEST_CASE("ElasticForm refines degenerate elements along the continuous check", "[jacobian][degenerate]")
+{
+	Eigen::MatrixXd cp = p3_nodes(3);
+	cp.row(4) = cp.row(0);
+	cp.row(9) = cp.row(0);
+	std::vector<polyfem::basis::ElementBases> bs{bernstein_p3_basis(cp)};
+	const auto geometry = bs;
+	polyfem::assembler::AMIPSEnergy amips;
+	amips.set_size(3);
+	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), "");
+	polyfem::assembler::AssemblyValsCache cache;
+	cache.init_empty(false);
+	polyfem::solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
+									  polyfem::solver::ElementInversionCheck::ConservativeContinuous, 100000);
+	cache.init(true, bs, geometry);
+	const TempFile file("polyfem_degenerate_refinement_test.txt");
+	file.write("0 4\n0 9\n");
+	form.load_degenerate_edges(file.path.string(), Eigen::VectorXi::LinSpaced(20, 0, 19));
+
+	const Eigen::VectorXd zero = Eigen::VectorXd::Zero(60);
+	CHECK(std::isfinite(form.value(zero)));
+	CHECK(form.is_step_collision_free(zero, zero));
+
+	polyfem::quadrature::Quadrature before, after;
+	bs[0].compute_quadrature(before);
+	Eigen::VectorXd trial = zero;
+	trial[16 * 3 + 2] += 3;
+	CHECK(form.max_step_size(zero, trial) < 1);
+	const json info = json::object();
+	form.post_step(polysolve::nonlinear::PostStepData(0, info, zero, zero));
+	bs[0].compute_quadrature(after);
+	CHECK(after.size() > before.size());
+	CHECK(after.weights.minCoeff() > 0);
+	CHECK(after.weights.sum() == Catch::Approx(before.weights.sum()));
+	CHECK(std::isfinite(form.value(zero)));
+}
+#endif

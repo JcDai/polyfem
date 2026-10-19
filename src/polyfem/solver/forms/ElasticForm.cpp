@@ -63,6 +63,42 @@ namespace polyfem::solver
 			log_and_throw_error("No corner quadrature with positive weights of order {} to {} in {}D", order, order + max_bump, dim);
 		}
 
+		/// Quadrature of the degenerate checks' rule (utils::degenerate_quadrature)
+		/// copied onto every leaf of @p tree. Each point is computed as
+		/// lambda_0 v_0 + sum_j mu_j v_j with lambda_0 = 1 - sum_j mu_j, the leaf
+		/// vertices v_k and the rule's point mu, in double precision: the
+		/// rounding the checks' samples are widened by (pymiso sample_points)
+		/// assumes exactly this.
+		quadrature::Quadrature refine_degenerate_quadrature(const Tree &tree, const int dim)
+		{
+			Eigen::MatrixXd pts = Eigen::MatrixXd::Zero(dim + 1, dim);
+			for (int k = 1; k <= dim; ++k)
+				pts(k, k - 1) = 1;
+			const auto [leaf_vertices, exponents] = extract_subelement_volumes(pts, tree);
+			const Quadrature rule = degenerate_quadrature(dim);
+			const int n = rule.size();
+
+			Quadrature quad;
+			quad.points.resize(n * exponents.size(), dim);
+			quad.weights.resize(n * exponents.size());
+			for (size_t l = 0; l < exponents.size(); ++l)
+			{
+				const auto v = leaf_vertices.middleRows(l * (dim + 1), dim + 1);
+				for (int q = 0; q < n; ++q)
+				{
+					const Eigen::RowVectorXd mu = rule.points.row(q);
+					const double lambda0 = 1. - mu.sum();
+					Eigen::RowVectorXd x = lambda0 * v.row(0);
+					for (int j = 0; j < dim; ++j)
+						x += mu(j) * v.row(j + 1);
+					quad.points.row(l * n + q) = x;
+					quad.weights(l * n + q) = std::ldexp(rule.weights(q), -exponents[l]);
+				}
+			}
+			assert(fabs(quad.weights.sum() - rule.weights.sum()) < 1e-8);
+			return quad;
+		}
+
 		quadrature::Quadrature refine_quadrature(const Tree &tree, const int dim, const int order)
 		{
 			Eigen::MatrixXd pts(dim + 1, dim);
@@ -95,10 +131,10 @@ namespace polyfem::solver
 			return quad;
 		}
 
-		void update_quadrature(const int invalidID, const int dim, Tree &tree, const int quad_order, basis::ElementBases &bs, const basis::ElementBases &gbs, assembler::AssemblyValsCache &ass_vals_cache)
+		void update_quadrature(const int invalidID, const int dim, Tree &tree, const int quad_order, basis::ElementBases &bs, const basis::ElementBases &gbs, assembler::AssemblyValsCache &ass_vals_cache, const bool degenerate = false)
 		{
 			// update quadrature to capture the point with negative jacobian
-			const Quadrature quad = refine_quadrature(tree, dim, quad_order);
+			const Quadrature quad = degenerate ? refine_degenerate_quadrature(tree, dim) : refine_quadrature(tree, dim, quad_order);
 
 			// capture the flipped point by refining the quadrature
 			bs.set_quadrature([quad](Quadrature &quad_) {
@@ -143,20 +179,12 @@ namespace polyfem::solver
 
 		if (is_conservative(check_inversion_))
 		{
-			Eigen::VectorXd x0;
-			x0.setZero(n_bases_ * (is_volume_ ? 3 : 2));
-			// Call is_valid() directly rather than going through one of the
-			// step hooks: which of those actually certifies depends on the
-			// mode, but the rest quadrature setup below assumes a valid rest
-			// state either way.
+			// The rest state is certified valid at the first check
+			// (validate_rest()), once degenerate corners, if any, are loaded.
 			rest_nodes_ = utils::rest_nodes(is_volume_ ? 3 : 2, bases_, geom_bases_);
 			// The energy evaluates det J from the same control points the
 			// checks see; compute them once rather than on every assembly.
 			ass_vals_cache_.set_control_points(utils::element_control_points(is_volume_ ? 3 : 2, bases_, geom_bases_));
-			const auto [isvalid, id, tree] = is_valid(
-				is_volume_ ? 3 : 2, bases_, geom_bases_, x0, jacobian_threshold_, conservative_max_iter_, &rest_nodes_);
-			if (!isvalid)
-				log_and_throw_error("Initial state has inverted elements (element {})!", id);
 
 			int basis_order = 0;
 			int gbasis_order = 0;
@@ -262,6 +290,7 @@ namespace polyfem::solver
 		// candidates from is_step_valid(), so it leaves the step alone here.
 		if (check_inversion_ != ElementInversionCheck::ConservativeContinuous)
 			return 1.;
+		validate_rest();
 
 		const int dim = is_volume_ ? 3 : 2;
 
@@ -282,7 +311,7 @@ namespace polyfem::solver
 			double transient_check_time = 0;
 			{
 				POLYFEM_SCOPED_TIMER("Transient Jacobian Check", transient_check_time);
-				std::tie(step, invalidID, invalidStep, subdivision_tree) = max_time_step(dim, bases_, geom_bases_, x0, x1, precision, jacobian_threshold_, conservative_max_iter_, &rest_nodes_);
+				std::tie(step, invalidID, invalidStep, subdivision_tree) = max_time_step(dim, bases_, geom_bases_, x0, x1, precision, jacobian_threshold_, conservative_max_iter_, &rest_nodes_, degenerate_.get());
 			}
 
 			continuous_check_time_ += transient_check_time;
@@ -335,7 +364,8 @@ namespace polyfem::solver
 		if (!is_conservative(check_inversion_))
 			return true;
 
-		const auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x1, jacobian_threshold_, conservative_max_iter_, &rest_nodes_);
+		validate_rest();
+		const auto [isvalid, id, tree] = is_valid(is_volume_ ? 3 : 2, bases_, geom_bases_, x1, jacobian_threshold_, conservative_max_iter_, &rest_nodes_, degenerate_.get());
 		return isvalid;
 	}
 
@@ -368,6 +398,7 @@ namespace polyfem::solver
 		// nothing to back away from.
 		if (check_inversion_ != ElementInversionCheck::ConservativeStatic)
 			return true;
+		validate_rest();
 
 		double check_time = 0;
 		bool isvalid = false;
@@ -376,7 +407,7 @@ namespace polyfem::solver
 		{
 			POLYFEM_SCOPED_TIMER("Static Jacobian Check", check_time);
 			std::tie(isvalid, id, witness) = is_valid(
-				is_volume_ ? 3 : 2, bases_, geom_bases_, x1, jacobian_threshold_, conservative_max_iter_, &rest_nodes_);
+				is_volume_ ? 3 : 2, bases_, geom_bases_, x1, jacobian_threshold_, conservative_max_iter_, &rest_nodes_, degenerate_.get());
 		}
 		static_check_time_ += check_time;
 		++static_check_calls_;
@@ -426,8 +457,54 @@ namespace polyfem::solver
 		{
 			auto &bs = bases_[id];
 			auto &gbs = geom_bases_[id];
-			update_quadrature(id, dim, quadrature_hierarchy_[id], quadrature_order_, bs, gbs, ass_vals_cache_);
+			update_quadrature(id, dim, quadrature_hierarchy_[id], quadrature_order_, bs, gbs, ass_vals_cache_, degenerate_ != nullptr);
 		}
+	}
+
+	void ElasticForm::validate_rest() const
+	{
+		if (rest_validated_ || !is_conservative(check_inversion_))
+			return;
+		const int dim = is_volume_ ? 3 : 2;
+		const Eigen::VectorXd x0 = Eigen::VectorXd::Zero(n_bases_ * dim);
+		const auto [isvalid, id, tree] = is_valid(
+			dim, bases_, geom_bases_, x0, jacobian_threshold_, conservative_max_iter_, &rest_nodes_, degenerate_.get());
+		if (!isvalid)
+			log_and_throw_error("Initial state has inverted elements (element {})!", id);
+		rest_validated_ = true;
+	}
+
+	void ElasticForm::load_degenerate_edges(const std::string &path, const Eigen::VectorXi &input_to_node)
+	{
+		if (!is_conservative(check_inversion_))
+			return;
+		const int dim = is_volume_ ? 3 : 2;
+		std::vector<utils::DegenerateCorner> corners = utils::read_degenerate_edges(path, input_to_node, bases_);
+		if (corners.empty())
+			return;
+
+		degenerate_ = std::make_shared<const utils::DegenerateMesh>(utils::make_degenerate_mesh(dim, bases_, geom_bases_, std::move(corners)));
+
+		std::vector<utils::ElementControlPoints> control_points(bases_.size());
+		for (int e = 0; e < (int)bases_.size(); ++e)
+			control_points[e] = utils::degenerate_control_points(*degenerate_, e);
+		ass_vals_cache_.set_control_points(std::move(control_points));
+
+		// All elements, marked or not, use the rule the degenerate checks
+		// sample at: it has no corner, where det J is allowed to vanish.
+		refines_quadrature_ = true;
+		for (int e = 0; e < (int)bases_.size(); ++e)
+		{
+			quadrature_hierarchy_[e] = Tree();
+			update_quadrature(e, dim, quadrature_hierarchy_[e], quadrature_order_, bases_[e], geom_bases_[e], ass_vals_cache_, true);
+		}
+		pending_refinement_.reset();
+		rest_validated_ = false;
+
+		int marked = 0;
+		for (const auto &c : degenerate_->corners)
+			marked += c.vertex >= 0;
+		logger().info("Degenerate Jacobian checks: {} of {} elements have a degenerate corner", marked, bases_.size());
 	}
 
 	void ElasticForm::compute_cached_stiffness()

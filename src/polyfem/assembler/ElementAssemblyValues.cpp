@@ -154,6 +154,8 @@ namespace polyfem
 				computed = utils::element_control_points(dim, *basis_, *gbasis_);
 			const utils::ElementControlPoints &cp = control_points ? *control_points : computed;
 			const Eigen::MatrixXd d = utils::control_point_displacement(dim, cp, *basis_, *gbasis_, disp);
+			if (cp.bernstein)
+				return utils::robust_evaluate_jacobian_bernstein(cp.rest, cp.rest_hi, d, quadrature.points);
 			return utils::robust_evaluate_jacobian(cp.order, cp.rest, d, quadrature.points);
 		}
 

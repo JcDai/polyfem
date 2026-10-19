@@ -8,4 +8,7 @@ endif()
 message(STATUS "Third-party: creating target 'misolib::misolib'")
 
 include(CPM)
-CPMAddPackage("gl:minimize-solve/misolib#a6a12c679f7ab5b0beb5b01b7db5def70c52a9b8")
+# Degenerate inclusions and sampling at points other than the box vertices
+# (numSamples), needed by the degenerate checks.
+# TODO: pin the commit once branch polyfem-degenerate is pushed.
+CPMAddPackage("gl:minimize-solve/misolib#polyfem-degenerate")

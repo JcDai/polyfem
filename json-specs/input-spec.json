@@ -1636,6 +1636,12 @@
         "doc": "Minimum Jacobian determinant an element must keep for the conservative inversion check to accept it. 0 forbids only actual inversion; a small positive value additionally rejects near-degenerate elements. Ignored when check_inversion is \"Discrete\"."
     },
     {
+        "pointer": "/solver/advanced/degenerate_edges",
+        "type": "string",
+        "default": "",
+        "doc": "File of directed edges, one pair of zero-based input mesh point rows per line: an element corner and the control point next to it on an incident edge, collapsed onto it. Requires a conservative check_inversion and cubic Bernstein elements (one collapsed control point per corner for triangles, one or two for tetrahedra; the collapse must hold throughout the simulation). The conservative checks then allow det J to vanish at those corners, and every element is checked with the degenerate solvers and integrated with an interior quadrature rule of positive weights."
+    },
+    {
         "pointer": "/solver/advanced/conservative_max_iter",
         "type": "int",
         "default": 100000,
@@ -1653,6 +1659,7 @@
             "check_inversion",
             "jacobian_threshold",
             "conservative_max_iter",
+            "degenerate_edges",
             "characteristic_length",
             "characteristic_force_density"
         ],
