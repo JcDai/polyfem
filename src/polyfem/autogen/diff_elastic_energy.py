@@ -8,9 +8,10 @@ from pathlib import Path
 
 
 class AMIPSEnergy:
-    def __init__(self, use_rest_pose, dim):
+    def __init__(self, use_rest_pose, dim, power):
         self.use_rest_pose = use_rest_pose
         self.dim = dim
+        self.power = power
 
     def parameters(self):
         return []
@@ -29,18 +30,15 @@ class AMIPSEnergy:
                 [1, 0, 0],
                 [sp.Rational(1, 2), sp.sqrt(3) / 2, 0],
                 [sp.Rational(1, 2),
-                 sp.Rational(1, 2) / sp.sqrt(3), sp.sqrt(3) / 2]
+                 sp.Rational(1, 2) / sp.sqrt(3), sp.sqrt(sp.Rational(2, 3))]
             ])
         standard = standard.inv().T
 
         return standard
 
     def eval(self, p, t, el_id, def_grad):
-        if self.use_rest_pose:
-            power = 1 if self.dim == 2 else sp.Rational(2, 3)
-        else:
-            power = 2 if self.dim == 2 else sp.Rational(5, 3)
-
+        power = 1 if self.dim == 2 else sp.Rational(2, 3)
+        
         standard = self.get_standard()
 
         if not self.use_rest_pose:
@@ -52,7 +50,7 @@ class AMIPSEnergy:
         #     return sp.nan
 
         powJ = det**power
-        return (def_grad.T @ def_grad).trace() / powJ
+        return ((def_grad.T @ def_grad).trace() / powJ) ** self.power
 
 
 class VolumePenaltyEnergy:
@@ -94,10 +92,14 @@ def compute_energy(energy):
 energies = {
     "VolumePenalty2d": VolumePenaltyEnergy(dim=2),
     "VolumePenalty3d": VolumePenaltyEnergy(dim=3),
-    "AMIPS2d": AMIPSEnergy(use_rest_pose=False, dim=2),
-    "AMIPS2drest": AMIPSEnergy(use_rest_pose=True, dim=2),
-    "AMIPS3d": AMIPSEnergy(use_rest_pose=False, dim=3),
-    "AMIPS3drest": AMIPSEnergy(use_rest_pose=True, dim=3),
+    "AMIPS2d": AMIPSEnergy(use_rest_pose=False, dim=2, power=1),
+    "AMIPS2drest": AMIPSEnergy(use_rest_pose=True, dim=2, power=1),
+    "AMIPS3d": AMIPSEnergy(use_rest_pose=False, dim=3, power=1),
+    "AMIPS3drest": AMIPSEnergy(use_rest_pose=True, dim=3, power=1),
+    "AMIPS2d_p2": AMIPSEnergy(use_rest_pose=False, dim=2, power=2),
+    "AMIPS2drest_p2": AMIPSEnergy(use_rest_pose=True, dim=2, power=2),
+    "AMIPS3d_p2": AMIPSEnergy(use_rest_pose=False, dim=3, power=2),
+    "AMIPS3drest_p2": AMIPSEnergy(use_rest_pose=True, dim=3, power=2),
 }
 
 
@@ -140,7 +142,7 @@ if __name__ == "__main__":
             # f.write("        }\n\n")
 
             f.write(
-                f"        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 3, 3> {name}_gradient{fparams} {{\n")
+                f"        inline Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 3, 3> {name}_gradient{fparams} {{\n")
             f.write(
                 f"            Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 3, 3> grad({dim},{dim});\n")
             for i in range(dim):
