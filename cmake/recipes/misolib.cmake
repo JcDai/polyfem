@@ -11,4 +11,4 @@ include(CPM)
 # Degenerate inclusions and sampling at points other than the box vertices
 # (numSamples), needed by the degenerate checks.
 # TODO: pin the commit once branch polyfem-degenerate is pushed.
-CPMAddPackage("gl:minimize-solve/misolib#polyfem-degenerate")
+CPMAddPackage("gl:minimize-solve/misolib#92a034e974e8e566f43cba2585e56f9b726bd6f1")
