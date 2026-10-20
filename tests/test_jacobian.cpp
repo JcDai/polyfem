@@ -1347,7 +1347,7 @@ TEST_CASE("ElasticForm integrates degenerate elements with interior quadrature",
 	const auto geometry = bs;
 	polyfem::assembler::AMIPSEnergy amips;
 	amips.set_size(3);
-	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), degenerate_test_resources());
+	amips.add_multimaterial(0, json{{"use_rest_pose", true}}, polyfem::Units(), degenerate_test_resources());
 	polyfem::assembler::AssemblyValsCache cache;
 	cache.init_empty(false);
 	polyfem::solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
@@ -1390,7 +1390,7 @@ TEST_CASE("ElasticForm refines degenerate elements along the continuous check", 
 	const auto geometry = bs;
 	polyfem::assembler::AMIPSEnergy amips;
 	amips.set_size(3);
-	amips.add_multimaterial(0, json{{"use_rest_pose", false}}, polyfem::Units(), degenerate_test_resources());
+	amips.add_multimaterial(0, json{{"use_rest_pose", true}}, polyfem::Units(), degenerate_test_resources());
 	polyfem::assembler::AssemblyValsCache cache;
 	cache.init_empty(false);
 	polyfem::solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
