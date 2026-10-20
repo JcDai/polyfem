@@ -343,8 +343,6 @@ namespace polyfem::utils
 		const Eigen::MatrixXd *rest = nullptr,
 		const DegenerateMesh *degenerate = nullptr);
 
-	Eigen::MatrixXd extract_nodes(const int dim, const basis::ElementBases &basis, const basis::ElementBases &gbasis, const Eigen::VectorXd &u, int order);
-	Eigen::MatrixXd extract_nodes(const int dim, const std::vector<basis::ElementBases> &bases, const std::vector<basis::ElementBases> &gbases, const Eigen::VectorXd &u, int order, int n_elem = -1);
 } // namespace polyfem::utils
 
 template <>

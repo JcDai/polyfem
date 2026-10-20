@@ -31,33 +31,6 @@ using namespace polyfem::assembler;
 
 namespace polyfem::utils
 {
-	Eigen::MatrixXd extract_nodes(const int dim, const std::vector<basis::ElementBases> &bases, const std::vector<basis::ElementBases> &gbases, const Eigen::VectorXd &u, int order, int n_elem)
-	{
-		if (n_elem < 0)
-			n_elem = bases.size();
-		Eigen::MatrixXd local_pts;
-		if (dim == 3)
-			autogen::p_nodes_3d(order, local_pts);
-		else
-			autogen::p_nodes_2d(order, local_pts);
-		const int n_basis_per_cell = local_pts.rows();
-		Eigen::MatrixXd cp = Eigen::MatrixXd::Zero(n_elem * n_basis_per_cell, dim);
-		for (int e = 0; e < n_elem; ++e)
-		{
-			ElementAssemblyValues vals;
-			vals.compute(e, dim == 3, local_pts, bases[e], gbases[e]);
-
-			for (std::size_t j = 0; j < vals.basis_values.size(); ++j)
-				for (const auto &g : vals.basis_values[j].global)
-					cp.middleRows(e * n_basis_per_cell, n_basis_per_cell) += g.val * vals.basis_values[j].val * u.segment(g.index * dim, dim).transpose();
-
-			Eigen::MatrixXd mapped;
-			gbases[e].eval_geom_mapping(local_pts, mapped);
-			cp.middleRows(e * n_basis_per_cell, n_basis_per_cell) += mapped;
-		}
-		return cp;
-	}
-
 	namespace
 	{
 		int control_point_order(const basis::ElementBases &basis, const basis::ElementBases &gbasis)
@@ -211,26 +184,6 @@ namespace polyfem::utils
 		vals.compute(0, dim == 3, control_point_nodes(dim, cp.order), basis, gbasis);
 		evaluate_displacement(vals, u, dim, disp);
 		return disp;
-	}
-
-	Eigen::MatrixXd extract_nodes(const int dim, const basis::ElementBases &basis, const basis::ElementBases &gbasis, const Eigen::VectorXd &u, int order)
-	{
-		Eigen::MatrixXd local_pts;
-		if (dim == 3)
-			autogen::p_nodes_3d(order, local_pts);
-		else
-			autogen::p_nodes_2d(order, local_pts);
-
-		Eigen::MatrixXd cp;
-		gbasis.eval_geom_mapping(local_pts, cp);
-
-		ElementAssemblyValues vals;
-		vals.compute(0, dim == 3, local_pts, basis, gbasis);
-		for (std::size_t j = 0; j < vals.basis_values.size(); ++j)
-			for (const auto &g : vals.basis_values[j].global)
-				cp += g.val * vals.basis_values[j].val * u.segment(g.index * dim, dim).transpose();
-
-		return cp;
 	}
 
 	Eigen::MatrixXd refined_nodes(const int dim, const int i)

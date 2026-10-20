@@ -30,6 +30,21 @@
 using namespace polyfem;
 using namespace polyfem::utils;
 using namespace polyfem::autogen;
+
+namespace
+{
+	/// Deformed control points (rest + displacement) at the nodes of order
+	/// max(displacement, geometry), as the checks see them.
+	Eigen::MatrixXd deformed_nodes(const int dim, const std::vector<basis::ElementBases> &bases, const std::vector<basis::ElementBases> &gbases, const Eigen::VectorXd &u)
+	{
+		return rest_nodes(dim, bases, gbases) + displacement_nodes(dim, bases, gbases, u);
+	}
+
+	Eigen::MatrixXd deformed_nodes(const int dim, const basis::ElementBases &basis, const basis::ElementBases &gbasis, const Eigen::VectorXd &u)
+	{
+		return deformed_nodes(dim, std::vector<basis::ElementBases>{basis}, std::vector<basis::ElementBases>{gbasis}, u);
+	}
+} // namespace
 namespace
 {
 	// det J of the map with control points cp (rows in p_nodes order) at the
@@ -526,7 +541,7 @@ TEST_CASE("jacobian-is-valid-witness-tree", "[jacobian]")
 		// checking one direction is not enough, since on this axis-aligned
 		// mesh an edge node can leave them unchanged along a single axis.
 		const auto corner_jac = [&](const Eigen::VectorXd &u) {
-			return evaluate_jacobian(order, extract_nodes(dim, bases[0], gbases[0], u, order), ref);
+			return evaluate_jacobian(order, deformed_nodes(dim, bases[0], gbases[0], u), ref);
 		};
 		const Eigen::VectorXd j_rest = corner_jac(zero);
 		const double tol = 1e-12 * j_rest.cwiseAbs().maxCoeff();
@@ -581,8 +596,8 @@ TEST_CASE("jacobian-is-valid-witness-tree", "[jacobian]")
 			// alongside it), so the smallest Jacobian over their vertices must
 			// be non-positive. The scale is the rest Jacobian, for a relative
 			// tolerance that absorbs double rounding of an interval certificate.
-			const Eigen::MatrixXd cp = extract_nodes(dim, bases[id], gbases[id], u, order);
-			const Eigen::MatrixXd rest_cp = extract_nodes(dim, bases[id], gbases[id], zero, order);
+			const Eigen::MatrixXd cp = deformed_nodes(dim, bases[id], gbases[id], u);
+			const Eigen::MatrixXd rest_cp = deformed_nodes(dim, bases[id], gbases[id], zero);
 			double min_j = std::numeric_limits<double>::infinity();
 			double scale = 0;
 			for (int l = 0; l < static_cast<int>(levels.size()); ++l)
@@ -675,7 +690,7 @@ TEST_CASE("jacobian-fattening-covers-taken-step", "[jacobian]")
 			const int ndof = debug.n_bases * dim;
 			const Eigen::VectorXd zero = Eigen::VectorXd::Zero(ndof);
 
-			const Eigen::MatrixXd rest = extract_nodes(dim, bases, gbases, zero, order);
+			const Eigen::MatrixXd rest = rest_nodes(dim, bases, gbases);
 
 			// Rest position of each node, to build cancelling displacements.
 			Eigen::VectorXd rest_dof = zero;
@@ -1015,68 +1030,8 @@ namespace
 		return element;
 	}
 
-	Eigen::MatrixXd nodal_displacements_to_matrix(const Eigen::VectorXd &u, const int dim)
-	{
-		Eigen::MatrixXd U(u.size() / dim, dim);
-		for (int i = 0; i < U.rows(); ++i)
-			U.row(i) = u.segment(i * dim, dim).transpose();
-		return U;
-	}
 } // namespace
 
-TEST_CASE("jacobian extract nodes on linear simplexes", "[jacobian][utils]")
-{
-	for (const int dim : {2, 3})
-	{
-		const auto basis = make_linear_simplex_basis(dim);
-		const int n_nodes = dim + 1;
-
-		Eigen::VectorXd u(n_nodes * dim);
-		for (int i = 0; i < u.size(); ++i)
-			u(i) = 0.05 * (i + 1);
-
-		Eigen::MatrixXd reference_nodes;
-		if (dim == 2)
-			polyfem::autogen::p_nodes_2d(1, reference_nodes);
-		else
-			polyfem::autogen::p_nodes_3d(1, reference_nodes);
-
-		const Eigen::MatrixXd cp = polyfem::utils::extract_nodes(dim, basis, basis, u, 1);
-		const Eigen::MatrixXd expected = reference_nodes + nodal_displacements_to_matrix(u, dim);
-
-		REQUIRE(cp.rows() == expected.rows());
-		REQUIRE(cp.cols() == expected.cols());
-		for (int r = 0; r < cp.rows(); ++r)
-			for (int c = 0; c < cp.cols(); ++c)
-				REQUIRE(cp(r, c) == Catch::Approx(expected(r, c)).margin(1e-12));
-	}
-}
-
-TEST_CASE("jacobian extract nodes over element ranges", "[jacobian][utils]")
-{
-	const int dim = 2;
-	const int n_nodes_per_element = dim + 1;
-	const auto basis0 = make_linear_simplex_basis(dim, 0);
-	const auto basis1 = make_linear_simplex_basis(dim, n_nodes_per_element, (Eigen::RowVector2d() << 2.0, -1.0).finished());
-
-	const std::vector<polyfem::basis::ElementBases> bases = {basis0, basis1};
-	const std::vector<polyfem::basis::ElementBases> gbases = bases;
-
-	Eigen::VectorXd u(bases.size() * n_nodes_per_element * dim);
-	for (int i = 0; i < u.size(); ++i)
-		u(i) = 0.01 * (i + 1);
-
-	const Eigen::MatrixXd all_cp = polyfem::utils::extract_nodes(dim, bases, gbases, u, 1);
-	const Eigen::MatrixXd first_cp = polyfem::utils::extract_nodes(dim, bases, gbases, u, 1, 1);
-
-	REQUIRE(all_cp.rows() == 2 * n_nodes_per_element);
-	REQUIRE(first_cp.rows() == n_nodes_per_element);
-	REQUIRE(first_cp.cols() == dim);
-
-	for (int r = 0; r < first_cp.rows(); ++r)
-		for (int c = 0; c < first_cp.cols(); ++c)
-			REQUIRE(first_cp(r, c) == Catch::Approx(all_cp(r, c)).margin(1e-12));
-}
 
 #ifdef POLYFEM_WITH_MISO
 #include <fstream>
