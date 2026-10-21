@@ -1,4 +1,3 @@
-#include <polyfem/solver/forms/ElasticForm.hpp>
 #include "NonlinearElasticVarForm.hpp"
 
 #include <polyfem/assembler/AssemblerUtils.hpp>
@@ -868,13 +867,14 @@ namespace polyfem::varform
 			mesh_.get(), &boundary_.total_local_boundary,
 			args["boundary_conditions"]["periodic"], /*fe_space_id=*/-1);
 
-        const std::string degenerate_file = args["solver"]["advanced"].value("degenerate_edges", std::string());
-        if (!degenerate_file.empty() && check_inversion != ElementInversionCheck::Discrete) {
-            if (args["space"].value("basis_type", std::string("Lagrange")) != "Bernstein")
-                log_and_throw_error("Degenerate edge metadata requires space.basis_type = Bernstein");
-            solve_data_.elastic_form->load_degenerate_edges(
-                utils::resolve_path(degenerate_file, args.value("root_path", std::string()), false), space_.space_in_node_to_node);
-        }
+		const std::string degenerate_file = args["solver"]["advanced"].value("degenerate_edges", std::string());
+		if (!degenerate_file.empty() && is_conservative(check_inversion))
+		{
+			if (args["space"].value("basis_type", std::string("Lagrange")) != "Bernstein")
+				log_and_throw_error("Degenerate edge metadata requires space.basis_type = Bernstein");
+			solve_data_.elastic_form->load_degenerate_edges(
+				utils::resolve_path(degenerate_file, args.value("root_path", std::string()), false), space_.space_in_node_to_node);
+		}
 
 		for (const auto &form : forms)
 			form->set_output_dir(output_path);
@@ -1106,8 +1106,10 @@ namespace polyfem::varform
 
 		if (args["space"]["advanced"]["count_flipped_els_continuous"])
 		{
-			const auto invalidList = utils::count_invalid(mesh_->dimension(), space_.basis_list(), space_.geometry_basis_list(), sol,
-                args["solver"]["advanced"]["conservative_max_iter"], solve_data_.elastic_form->degenerate_tets());
+			const auto invalidList = utils::count_invalid(
+				mesh_->dimension(), space_.basis_list(), space_.geometry_basis_list(), sol,
+				args["solver"]["advanced"]["conservative_max_iter"], nullptr,
+				solve_data_.elastic_form ? solve_data_.elastic_form->degenerate() : nullptr);
 			logger().debug("Flipped elements (cnt {}) : {}", invalidList.size(), invalidList);
 		}
 

@@ -1,5 +1,5 @@
-#include <polyfem/utils/StringUtils.hpp>
 #include <polyfem/legacy/State.hpp>
+#include <polyfem/utils/StringUtils.hpp>
 
 #include <polyfem/assembler/Mass.hpp>
 #include <polyfem/assembler/ViscousDamping.hpp>
@@ -326,13 +326,14 @@ namespace polyfem::legacy
 			mesh.get(), &total_local_boundary,
 			args["boundary_conditions"]["periodic"], /*fe_space_id=*/-1);
 
-        const std::string degenerate_file = args["solver"]["advanced"].value("degenerate_edges", std::string());
-        if (!degenerate_file.empty() && check_inversion != ElementInversionCheck::Discrete) {
-            if (args["space"].value("basis_type", std::string("Lagrange")) != "Bernstein")
-                log_and_throw_error("Degenerate edge metadata requires space.basis_type = Bernstein");
-            solve_data.elastic_form->load_degenerate_edges(
-                utils::resolve_path(degenerate_file, args.value("root_path", std::string()), false), in_node_to_node);
-        }
+		const std::string degenerate_file = args["solver"]["advanced"].value("degenerate_edges", std::string());
+		if (!degenerate_file.empty() && is_conservative(check_inversion))
+		{
+			if (args["space"].value("basis_type", std::string("Lagrange")) != "Bernstein")
+				log_and_throw_error("Degenerate edge metadata requires space.basis_type = Bernstein");
+			solve_data.elastic_form->load_degenerate_edges(
+				utils::resolve_path(degenerate_file, args.value("root_path", std::string()), false), in_node_to_node);
+		}
 
 		for (const auto &form : forms)
 			form->set_output_dir(output_dir);
@@ -420,7 +421,10 @@ namespace polyfem::legacy
 
 		if (args["space"]["advanced"]["count_flipped_els_continuous"])
 		{
-			const auto invalidList = count_invalid(mesh->dimension(), bases, geom_bases(), sol);
+			const auto invalidList = count_invalid(
+				mesh->dimension(), bases, geom_bases(), sol,
+				args["solver"]["advanced"]["conservative_max_iter"], nullptr,
+				solve_data.elastic_form ? solve_data.elastic_form->degenerate() : nullptr);
 			logger().debug("Flipped elements (cnt {}) : {}", invalidList.size(), invalidList);
 		}
 
