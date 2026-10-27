@@ -1,4 +1,6 @@
 #include "NLProblem.hpp"
+#include <polyfem/solver/forms/ElasticForm.hpp>
+#include <numeric>
 
 #include <polyfem/io/OBJWriter.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
@@ -105,6 +107,7 @@ namespace polyfem::solver
 		  penalty_forms_(penalty_forms),
 		  solver_(solver)
 	{
+		discover_dof_identifications();
 		setup_constraints();
 		use_reduced_size();
 	}
@@ -130,6 +133,7 @@ namespace polyfem::solver
 		  penalty_forms_(penalty_forms),
 		  solver_(solver)
 	{
+		discover_dof_identifications();
 		setup_constraints();
 		use_reduced_size();
 
@@ -153,6 +157,75 @@ namespace polyfem::solver
 		}
 	}
 
+	void NLProblem::discover_dof_identifications()
+	{
+		std::vector<std::pair<int, int>> pairs;
+		for (const auto &form : forms_)
+			if (const auto elastic = std::dynamic_pointer_cast<ElasticForm>(form))
+				if (const auto *m = elastic->degenerate())
+					for (size_t e = 0; e < m->corners.size(); ++e)
+					{
+						const auto &c = m->corners[e];
+						if (c.vertex < 0) continue;
+						for (const int near : c.near_nodes)
+							for (int k = 0; k < m->dim; ++k)
+								pairs.emplace_back(m->dofs[e * m->n_per + c.vertex] * m->dim + k,
+									m->dofs[e * m->n_per + near] * m->dim + k);
+					}
+		build_dof_identifications(pairs);
+	}
+
+	void NLProblem::build_dof_identifications(const std::vector<std::pair<int, int>> &pairs)
+	{
+		representative_.clear();
+		structural_roots_.clear();
+		structural_map_.resize(0, 0);
+		if (pairs.empty()) return;
+		representative_.resize(full_size_);
+		std::iota(representative_.begin(), representative_.end(), 0);
+		auto root = [&](int i) {
+			while (representative_[i] != i) i = representative_[i];
+			return i;
+		};
+		for (const auto &[a, b] : pairs)
+		{
+			if (a < 0 || b < 0 || a >= full_size_ || b >= full_size_)
+				log_and_throw_error("Invalid structural displacement identification {} {}", a, b);
+			representative_[root(b)] = root(a);
+		}
+		for (int i = 0; i < full_size_; ++i) representative_[i] = root(i);
+		std::vector<int> column(full_size_, -1);
+		for (int i = 0; i < full_size_; ++i)
+			if (representative_[i] == i)
+			{
+				column[i] = structural_roots_.size();
+				structural_roots_.push_back(i);
+			}
+		std::vector<Eigen::Triplet<double>> entries;
+		for (int i = 0; i < full_size_; ++i) entries.emplace_back(i, column[representative_[i]], 1.);
+		structural_map_.resize(full_size_, structural_roots_.size());
+		structural_map_.setFromTriplets(entries.begin(), entries.end());
+	}
+
+	void NLProblem::set_dof_identifications(const std::vector<std::pair<int, int>> &pairs)
+	{
+		build_dof_identifications(pairs);
+		setup_constraints();
+	}
+
+	NLProblem::TVector NLProblem::canonicalize(const TVector &full) const
+	{
+		if (!has_identifications()) return full;
+		TVector result = full;
+		for (int i = 0; i < full_size_; ++i) result[i] = full[representative_[i]];
+		return result;
+	}
+
+	void NLProblem::init(const TVector &x)
+	{
+		FullNLProblem::init(has_identifications() ? reduced_to_full(x) : x);
+	}
+
 	double NLProblem::normalize_forms()
 	{
 		return 1;
@@ -160,7 +233,7 @@ namespace polyfem::solver
 		// double total_weight = 0;
 		// for (const auto &f : forms_)
 		// 	total_weight += f->weight();
-		// if (full_size() == current_size())
+		// if (al_phase())
 		// {
 		// 	for (const auto &f : penalty_forms_)
 		// 		total_weight += f->weight() * f->lagrangian_weight();
@@ -254,9 +327,13 @@ namespace polyfem::solver
 
 	void NLProblem::setup_constraints()
 	{
+		use_constraint_projection_ = false;
+		penalty_problem_.reset();
+		Q1R1iTb_ = TVector::Zero(full_size_);
 		if (penalty_forms_.empty())
 		{
-			reduced_size_ = full_size_;
+			reduced_size_ = structural_size();
+			if (has_identifications()) { Q2_ = structural_map_; Q2t_ = Q2_.transpose(); }
 			num_penalty_constraints_ = 0;
 			return;
 		}
@@ -265,17 +342,41 @@ namespace polyfem::solver
 		if (penalty_forms_.size() == 1 && penalty_forms_.front()->has_projection())
 		{
 			Q2_ = penalty_forms_.front()->constraint_projection_matrix();
+			use_constraint_projection_ = true;
+			if (has_identifications())
+			{
+				// A supplied nullspace may already contain the collapse equalities.
+				// Copy its repeated rows exactly, but only if they agree to roundoff.
+				Eigen::SparseMatrix<double, Eigen::RowMajor> rows = Q2_;
+				std::vector<Eigen::Triplet<double>> entries;
+				for (int i = 0; i < full_size_; ++i)
+				{
+					const int r = representative_[i];
+					if (i != r)
+					{
+						const Eigen::SparseMatrix<double, Eigen::RowMajor> difference = rows.row(i) - rows.row(r);
+						if (difference.norm() > 1e-12 * std::max(1., rows.row(r).norm())) use_constraint_projection_ = false;
+					}
+					for (Eigen::SparseMatrix<double, Eigen::RowMajor>::InnerIterator it(rows, r); it; ++it)
+						entries.emplace_back(i, it.col(), it.value());
+				}
+				if (use_constraint_projection_) Q2_.setFromTriplets(entries.begin(), entries.end());
+			}
+		}
+		if (use_constraint_projection_)
+		{
 			Q2t_ = Q2_.transpose();
 
 			reduced_size_ = Q2_.cols();
-			if (reduced_size_ == 0)
-				return;
 			num_penalty_constraints_ = full_size_ - reduced_size_;
 
 			timer.start();
 			StiffnessMatrix Q2tQ2 = Q2t_ * Q2_;
-			solver_->analyze_pattern(Q2tQ2, Q2tQ2.rows());
-			solver_->factorize(Q2tQ2);
+			if (reduced_size_ > 0)
+			{
+				solver_->analyze_pattern(Q2tQ2, Q2tQ2.rows());
+				solver_->factorize(Q2tQ2);
+			}
 			timer.stop();
 			logger().debug("Factorization and computation of Q2tQ2 took: {}", timer.getElapsedTime());
 
@@ -304,16 +405,21 @@ namespace polyfem::solver
 		}
 		StiffnessMatrix A(index, full_size_);
 		A.setFromTriplets(Ae.begin(), Ae.end());
+		if (has_identifications()) A = A * structural_map_;
 		A.makeCompressed();
 
-		if (A.rows() == 0)
+		if (A.rows() == 0 || (has_identifications() && A.norm() == 0))
 		{
-			reduced_size_ = full_size_;
+			for (const auto &f : penalty_forms_)
+				if (f->constraint_value().norm() > 1e-10)
+					log_and_throw_error("Constraint values conflict with shared displacements");
+			reduced_size_ = structural_size();
+			if (has_identifications()) { Q2_ = structural_map_; Q2t_ = Q2_.transpose(); }
 			num_penalty_constraints_ = 0;
 			return;
 		}
 
-		int constraint_size = A.rows();
+		int constraint_size = std::min(A.rows(), A.cols());
 		num_penalty_constraints_ = A.rows();
 #ifdef POLYSOLVE_WITH_SPQR
 		SuiteSparseMatrix At = A.transpose();
@@ -408,18 +514,18 @@ namespace polyfem::solver
 		if (constraint_size != num_penalty_constraints_)
 			logger().warn("Matrix A is not full rank, constraint size: {} instead of {}", constraint_size, num_penalty_constraints_);
 
-		reduced_size_ = full_size_ - constraint_size;
+		reduced_size_ = structural_size() - constraint_size;
 
 		timer.start();
 
 		Q1_ = Q.leftCols(constraint_size);
-		assert(Q1_.rows() == full_size_);
+		assert(Q1_.rows() == structural_size());
 		assert(Q1_.cols() == constraint_size);
 
 		Q2_ = Q.rightCols(reduced_size_);
 		Q2t_ = Q2_.transpose();
 
-		assert(Q2_.rows() == full_size_);
+		assert(Q2_.rows() == structural_size());
 		assert(Q2_.cols() == reduced_size_);
 
 		R1_ = R.topRows(constraint_size);
@@ -427,6 +533,12 @@ namespace polyfem::solver
 		assert(R1_.cols() == num_penalty_constraints_);
 
 		assert((Q1_.transpose() * Q2_).norm() < 1e-10);
+		if (has_identifications())
+		{
+			Q1_ = structural_map_ * Q1_;
+			Q2_ = structural_map_ * Q2_;
+			Q2t_ = Q2_.transpose();
+		}
 
 		timer.stop();
 		logger().debug("Getting Q1 Q2, R1 took: {}", timer.getElapsedTime());
@@ -441,8 +553,11 @@ namespace polyfem::solver
 		logger().debug("Getting Q2'*Q2, took: {}", timer.getElapsedTime());
 
 		timer.start();
-		solver_->analyze_pattern(Q2tQ2, Q2tQ2.rows());
-		solver_->factorize(Q2tQ2);
+		if (reduced_size_ > 0)
+		{
+			solver_->analyze_pattern(Q2tQ2, Q2tQ2.rows());
+			solver_->factorize(Q2tQ2);
+		}
 		timer.stop();
 		logger().debug("Factorization of Q2'*Q2 took: {}", timer.getElapsedTime());
 
@@ -473,9 +588,12 @@ namespace polyfem::solver
 		if (num_penalty_constraints_ == 0)
 			return;
 
-		if (penalty_forms_.size() == 1 && penalty_forms_.front()->has_projection())
+		if (use_constraint_projection_)
 		{
-			Q1R1iTb_ = penalty_forms_.front()->constraint_projection_vector();
+			const TVector offset = penalty_forms_.front()->constraint_projection_vector();
+			Q1R1iTb_ = canonicalize(offset);
+			if ((Q1R1iTb_ - offset).norm() > 1e-10 * std::max(1., offset.norm()))
+				log_and_throw_error("Constraint offsets conflict with declared shared displacements");
 			return;
 		}
 
@@ -537,9 +655,11 @@ namespace polyfem::solver
 #endif
 		}
 
+		if (has_identifications() && (R1_.transpose() * sol - constraint_values).norm() > 1e-10 * std::max(1., constraint_values.norm()))
+			log_and_throw_error("Constraint values conflict with shared displacements");
 		assert((R1_.transpose() * sol - constraint_values).norm() < 1e-10);
 
-		Q1R1iTb_ = Q1_ * sol;
+		Q1R1iTb_ = canonicalize(Q1_ * sol);
 
 		timer.stop();
 		logger().debug("Computing Q1R1iTb took: {}", timer.getElapsedTime());
@@ -549,16 +669,16 @@ namespace polyfem::solver
 	{
 		FullNLProblem::init_lagging(reduced_to_full(x));
 
-		if (penalty_problem_ && full_size() == current_size())
-			penalty_problem_->init_lagging(x);
+		if (penalty_problem_ && al_phase())
+			penalty_problem_->init_lagging(reduced_to_full(x));
 	}
 
 	void NLProblem::update_lagging(const TVector &x, const int iter_num)
 	{
 		FullNLProblem::update_lagging(reduced_to_full(x), iter_num);
 
-		if (penalty_problem_ && full_size() == current_size())
-			penalty_problem_->update_lagging(x, iter_num);
+		if (penalty_problem_ && al_phase())
+			penalty_problem_->update_lagging(reduced_to_full(x), iter_num);
 	}
 
 	void NLProblem::update_quantities(const double t, const TVector &x)
@@ -570,7 +690,7 @@ namespace polyfem::solver
 			f->update_quantities(t, full);
 
 		for (auto &f : penalty_forms_)
-			f->update_quantities(t, x);
+			f->update_quantities(t, full);
 
 		if (!penalty_forms_.empty())
 			update_constraint_values();
@@ -580,16 +700,16 @@ namespace polyfem::solver
 	{
 		FullNLProblem::line_search_begin(reduced_to_full(x0), reduced_to_full(x1));
 
-		if (penalty_problem_ && full_size() == current_size())
-			penalty_problem_->line_search_begin(x0, x1);
+		if (penalty_problem_ && al_phase())
+			penalty_problem_->line_search_begin(reduced_to_full(x0), reduced_to_full(x1));
 	}
 
 	double NLProblem::max_step_size(const TVector &x0, const TVector &x1)
 	{
 		double max_step = FullNLProblem::max_step_size(reduced_to_full(x0), reduced_to_full(x1));
 
-		if (penalty_problem_ && full_size() == current_size())
-			max_step = std::min(max_step, penalty_problem_->max_step_size(x0, x1));
+		if (penalty_problem_ && al_phase())
+			max_step = std::min(max_step, penalty_problem_->max_step_size(reduced_to_full(x0), reduced_to_full(x1)));
 
 		return max_step;
 	}
@@ -598,8 +718,8 @@ namespace polyfem::solver
 	{
 		bool valid = FullNLProblem::is_step_valid(reduced_to_full(x0), reduced_to_full(x1));
 
-		if (penalty_problem_ && valid && full_size() == current_size())
-			valid = penalty_problem_->is_step_valid(x0, x1);
+		if (penalty_problem_ && valid && al_phase())
+			valid = penalty_problem_->is_step_valid(reduced_to_full(x0), reduced_to_full(x1));
 
 		return valid;
 	}
@@ -608,8 +728,8 @@ namespace polyfem::solver
 	{
 		bool acceptable = FullNLProblem::is_step_acceptable(reduced_to_full(x0), reduced_to_full(x1));
 
-		if (penalty_problem_ && acceptable && full_size() == current_size())
-			acceptable = penalty_problem_->is_step_acceptable(x0, x1);
+		if (penalty_problem_ && acceptable && al_phase())
+			acceptable = penalty_problem_->is_step_acceptable(reduced_to_full(x0), reduced_to_full(x1));
 
 		return acceptable;
 	}
@@ -618,8 +738,8 @@ namespace polyfem::solver
 	{
 		bool free = FullNLProblem::is_step_collision_free(reduced_to_full(x0), reduced_to_full(x1));
 
-		if (penalty_problem_ && free && full_size() == current_size())
-			free = penalty_problem_->is_step_collision_free(x0, x1);
+		if (penalty_problem_ && free && al_phase())
+			free = penalty_problem_->is_step_collision_free(reduced_to_full(x0), reduced_to_full(x1));
 
 		return free;
 	}
@@ -636,9 +756,9 @@ namespace polyfem::solver
 		// TODO: removed fearure const bool only_elastic
 		double res = FullNLProblem::value(reduced_to_full(x));
 
-		if (penalty_problem_ && full_size() == current_size())
+		if (penalty_problem_ && al_phase())
 		{
-			res += penalty_problem_->value(x);
+			res += penalty_problem_->value(reduced_to_full(x));
 		}
 
 		return res;
@@ -648,9 +768,9 @@ namespace polyfem::solver
 	{
 		FullNLProblem::gradient(reduced_to_full(x), grad);
 
-		if (full_size() != current_size())
+		if (!al_phase() && reduced_size() != full_size())
 		{
-			if (penalty_forms_.size() == 1 && penalty_forms_.front()->can_project())
+			if (can_project())
 				penalty_forms_.front()->project_gradient(grad);
 			else
 				grad = Q2t_ * grad;
@@ -658,41 +778,43 @@ namespace polyfem::solver
 		else if (penalty_problem_)
 		{
 			TVector tmp;
-			penalty_problem_->gradient(x, tmp);
+			penalty_problem_->gradient(reduced_to_full(x), tmp);
 			grad += tmp;
 		}
+		if (al_phase() && has_identifications()) grad = structural_map_.transpose() * grad;
 	}
 
 	void NLProblem::hessian(const TVector &x, THessian &hessian)
 	{
 		FullNLProblem::hessian(reduced_to_full(x), hessian);
 
-		if (full_size() != current_size())
+		if (!al_phase() && reduced_size() != full_size())
 		{
 			full_hessian_to_reduced_hessian(hessian);
 		}
 		else if (penalty_problem_)
 		{
 			THessian tmp;
-			penalty_problem_->hessian(x, tmp);
+			penalty_problem_->hessian(reduced_to_full(x), tmp);
 			hessian += tmp;
 		}
+		if (al_phase() && has_identifications()) hessian = structural_map_.transpose() * hessian * structural_map_;
 	}
 
 	void NLProblem::solution_changed(const TVector &newX)
 	{
 		FullNLProblem::solution_changed(reduced_to_full(newX));
 
-		if (penalty_problem_ && full_size() == current_size())
-			penalty_problem_->solution_changed(newX);
+		if (penalty_problem_ && al_phase())
+			penalty_problem_->solution_changed(reduced_to_full(newX));
 	}
 
 	void NLProblem::post_step(const polysolve::nonlinear::PostStepData &data)
 	{
 		FullNLProblem::post_step(polysolve::nonlinear::PostStepData(data.iter_num, data.solver_info, reduced_to_full(data.x), reduced_to_full(data.grad)));
 
-		if (penalty_problem_ && full_size() == current_size())
-			penalty_problem_->post_step(data);
+		if (penalty_problem_ && al_phase())
+			penalty_problem_->post_step(polysolve::nonlinear::PostStepData(data.iter_num, data.solver_info, reduced_to_full(data.x), reduced_to_full(data.grad)));
 
 		// TODO: add me back
 		static int nsolves = 0;
@@ -710,13 +832,21 @@ namespace polyfem::solver
 
 	NLProblem::TVector NLProblem::full_to_reduced(const TVector &full) const
 	{
+		if (has_identifications() && (al_phase() || num_penalty_constraints_ == 0))
+		{
+			if (full.size() == structural_size()) return full;
+			TVector result(structural_size());
+			for (int i = 0; i < result.size(); ++i) result[i] = full[structural_roots_[i]];
+			return result;
+		}
 		// Reduced is already at the full size
-		if (full_size() == current_size() || full.size() == current_size())
+		if (al_phase() || full.size() == current_size())
 		{
 			return full;
 		}
 
 		TVector reduced(reduced_size());
+		if (reduced.size() == 0) return reduced;
 		const TVector k = full - Q1R1iTb_;
 		const TVector rhs = Q2t_ * k;
 		solver_->solve(rhs, reduced);
@@ -732,8 +862,9 @@ namespace polyfem::solver
 
 	NLProblem::TVector NLProblem::full_to_reduced_grad(const TVector &full) const
 	{
+		if (al_phase() && has_identifications()) return structural_map_.transpose() * full;
 		TVector grad = full;
-		if (penalty_forms_.size() == 1 && penalty_forms_.front()->can_project())
+		if (can_project())
 			penalty_forms_.front()->project_gradient(grad);
 		else
 			grad = Q2t_ * grad;
@@ -743,13 +874,15 @@ namespace polyfem::solver
 
 	NLProblem::TVector NLProblem::full_to_reduced_diag(const TVector &full_diag) const
 	{
-		if (full_size() == current_size() || full_diag.size() == current_size())
+		if (has_identifications() && (al_phase() || num_penalty_constraints_ == 0))
+			return structural_map_.transpose() * full_diag;
+		if (al_phase() || full_diag.size() == current_size())
 		{
 			return full_diag;
 		}
 
 		TVector diag = full_diag;
-		if (penalty_forms_.size() == 1 && penalty_forms_.front()->can_project())
+		if (can_project())
 			penalty_forms_.front()->project_diag(diag);
 		else
 		{
@@ -762,8 +895,14 @@ namespace polyfem::solver
 
 	NLProblem::TVector NLProblem::reduced_to_full(const TVector &reduced) const
 	{
+		if (has_identifications())
+		{
+			if (reduced.size() == full_size_) return canonicalize(reduced);
+			if (al_phase() || num_penalty_constraints_ == 0) return structural_map_ * reduced;
+			return canonicalize(Q1R1iTb_ + Q2_ * reduced);
+		}
 		// Full is already at the reduced size
-		if (full_size() == current_size() || full_size() == reduced.size())
+		if (al_phase() || full_size() == reduced.size())
 		{
 			return reduced;
 		}
@@ -785,7 +924,7 @@ namespace polyfem::solver
 
 	void NLProblem::full_hessian_to_reduced_hessian(StiffnessMatrix &hessian) const
 	{
-		if (penalty_forms_.size() == 1 && penalty_forms_.front()->can_project())
+		if (can_project())
 			penalty_forms_.front()->project_hessian(hessian);
 		else
 		{

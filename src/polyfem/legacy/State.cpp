@@ -1,5 +1,6 @@
 #include <polyfem/legacy/State.hpp>
 #include <polyfem/Common.hpp>
+#include <polyfem/utils/Jacobian.hpp>
 
 #include <polyfem/io/MatrixIO.hpp>
 #include <polyfem/io/Evaluator.hpp>
@@ -837,9 +838,6 @@ namespace polyfem::legacy
 			macro_strain_constraint.init(dim, args["constraints"]["macro_displacement_gradient"], resources);
 		}
 
-		if (args["space"]["advanced"]["count_flipped_els"])
-			stats.count_flipped_elements(*mesh, geom_bases());
-
 		const int prev_bases = n_bases;
 		n_bases += obstacle.n_vertices();
 
@@ -852,6 +850,20 @@ namespace polyfem::legacy
 			mesh->update_nodes(in_node_to_node);
 			timer2.stop();
 			logger().debug("Done (took {}s)", timer2.getElapsedTime());
+		}
+
+		if (args["space"]["advanced"]["count_flipped_els"])
+		{
+			utils::DegenerateMesh degenerate;
+			const std::string path = args["solver"]["advanced"].value("degenerate_edges", std::string());
+			if (!path.empty())
+			{
+				auto corners = utils::read_degenerate_edges(
+					utils::resolve_path(path, root_path(), false), in_node_to_node, bases);
+				if (!corners.empty())
+					degenerate = utils::make_degenerate_mesh(mesh->dimension(), bases, geom_bases(), std::move(corners));
+			}
+			stats.count_flipped_elements(*mesh, geom_bases(), &degenerate);
 		}
 
 		logger().info("Building collision mesh...");

@@ -22,6 +22,9 @@
 #include <polyfem/State.hpp>
 #include <polyfem/quadrature/Quadrature.hpp>
 #include <polyfem/solver/forms/ElasticForm.hpp>
+#include <polyfem/solver/NLProblem.hpp>
+#include <polyfem/solver/forms/lagrangian/MatrixLagrangianForm.hpp>
+#include <polysolve/linear/Solver.hpp>
 #include <polyfem/varforms/VarForm.hpp>
 
 #include "VarFormTestAccess.hpp"
@@ -1159,6 +1162,55 @@ TEST_CASE("degenerate corners are allowed at every vertex and order", "[jacobian
 			}
 }
 
+TEST_CASE("initial flipped element check supports declared collapsed corners", "[jacobian][degenerate]")
+{
+	for (const int dim : {2, 3})
+	{
+		Eigen::MatrixXd cp = p3_nodes(dim);
+		Eigen::MatrixXi cells(1, dim + 1);
+		for (int i = 0; i <= dim; ++i)
+			cells(0, i) = i;
+		auto mesh = mesh::Mesh::create(mesh::MeshData(cp.topRows(dim + 1), cells));
+		const int near = near_node(dim, 0, 1);
+		cp.row(near) = cp.row(0);
+		std::vector<DegenerateCorner> corners(1);
+		corners[0].vertex = 0;
+		corners[0].near_nodes = {near};
+
+		// valid collapse passes only with metadata
+		{
+			auto bs = std::vector<basis::ElementBases>{bernstein_p3_basis(cp)};
+			bs[0].has_parameterization = true;
+			bs[0].set_quadrature([dim](quadrature::Quadrature &q) {
+				q.points = p3_nodes(dim).topRows(dim + 1);
+				q.weights = Eigen::VectorXd::Ones(dim + 1);
+			});
+			const auto marked = make_degenerate_mesh(dim, bs, bs, corners);
+			io::OutStatsData stats;
+			CHECK_NOTHROW(stats.count_flipped_elements(*mesh, bs, &marked));
+			CHECK(stats.n_flipped == 0);
+			CHECK_THROWS(stats.count_flipped_elements(*mesh, bs));
+		}
+		// inverted cone fails
+		{
+			cp.col(0) *= -1;
+			const std::vector<basis::ElementBases> bs{bernstein_p3_basis(cp)};
+			const auto marked = make_degenerate_mesh(dim, bs, bs, corners);
+			io::OutStatsData stats;
+			CHECK_THROWS(stats.count_flipped_elements(*mesh, bs, &marked));
+			CHECK(stats.n_flipped == 1);
+		}
+		// Rest declarations are trusted and canonicalized, not re-verified.
+		{
+			cp = p3_nodes(dim);
+			const std::vector<basis::ElementBases> bs{bernstein_p3_basis(cp)};
+			const auto marked = make_degenerate_mesh(dim, bs, bs, corners);
+			io::OutStatsData stats;
+			CHECK_NOTHROW(stats.count_flipped_elements(*mesh, bs, &marked));
+		}
+	}
+}
+
 TEST_CASE("degenerate checks detect inversion and require the collapse", "[jacobian][degenerate]")
 {
 	Eigen::MatrixXd cp = p3_nodes(3);
@@ -1218,6 +1270,136 @@ TEST_CASE("degenerate checks convert Lagrange and lower-order geometry exactly",
 			CHECK(ml.rest_hi(i, d) >= uv(i, d));
 			CHECK(ml.rest_hi(i, d) - ml.rest_lo(i, d) < 1e-14);
 		}
+}
+
+
+TEST_CASE("trusted Lagrange collapse uses one coefficient enclosure", "[jacobian][degenerate][trusted-collapse]")
+{
+	const auto uv = p3_nodes(3);
+	auto geometry = bernstein_p3_basis(uv);
+	for (int i = 0; i < 20; ++i)
+	{
+		geometry.bases[i].set_basis([i](const Eigen::MatrixXd &p, Eigen::MatrixXd &v) { p_basis_value_3d(false, 3, i, p, v); });
+		geometry.bases[i].set_grad([i](const Eigen::MatrixXd &p, Eigen::MatrixXd &v) { p_grad_basis_value_3d(false, 3, i, p, v); });
+	}
+	const std::vector<basis::ElementBases> bs{bernstein_p3_basis(uv)}, gbs{geometry};
+	std::vector<DegenerateCorner> corners(1);
+	corners[0].vertex = 0;
+	corners[0].near_nodes = {4, 9};
+	const auto m = make_degenerate_mesh(3, bs, gbs, corners);
+	CHECK((m.rest_lo.row(4).array() == m.rest_lo.row(0).array()).all());
+	CHECK((m.rest_hi.row(9).array() == m.rest_hi.row(0).array()).all());
+	const Eigen::VectorXd zero = Eigen::VectorXd::Zero(60);
+	CHECK(std::get<0>(is_valid(3, bs, gbs, zero, 0, 10000, nullptr, &m)));
+	Eigen::VectorXd separated = zero;
+	separated[12] = 1e-12;
+	CHECK_THROWS(is_valid(3, bs, gbs, separated, 0, 10000, nullptr, &m));
+}
+
+namespace
+{
+	class SharedDofQuadratic : public solver::Form
+	{
+	public:
+		std::string name() const override { return "shared-dof-test"; }
+		double value_unweighted(const Eigen::VectorXd &x) const override { return .5 * x.squaredNorm(); }
+		void first_derivative_unweighted(const Eigen::VectorXd &x, Eigen::VectorXd &g) const override { g = x; }
+		void second_derivative_unweighted(const Eigen::VectorXd &x, StiffnessMatrix &h) const override { h.resize(x.size(), x.size()); h.setIdentity(); }
+	};
+}
+
+TEST_CASE("structural displacements remain shared in AL and reduced coordinates", "[degenerate][trusted-collapse]")
+{
+	for (const bool constrained : {false, true})
+	{
+		CAPTURE(constrained);
+		std::vector<std::shared_ptr<solver::AugmentedLagrangianForm>> constraints;
+		if (constrained)
+		{
+			StiffnessMatrix A(1, 4);
+			A.insert(0, 0) = 1.;
+			auto f = std::make_shared<solver::MatrixLagrangianForm>(A, Eigen::MatrixXd::Constant(1, 1, .25));
+			f->set_initial_weight(3.);
+			constraints.push_back(f);
+		}
+		StiffnessMatrix mass(4, 4); mass.setIdentity();
+		solver::NLProblem problem(4, 0, {std::make_shared<SharedDofQuadratic>()}, constraints,
+			polysolve::linear::Solver::create(json{{"solver", "Eigen::SparseLU"}}, logger()), 1, 1, mass, 1);
+		problem.set_dof_identifications({{0, 1}, {1, 2}});
+		CHECK(problem.reduced_size() == (constrained ? 1 : 2));
+		for (const bool al : {true, false})
+		{
+			if (al) problem.use_full_size(); else problem.use_reduced_size();
+			Eigen::VectorXd full(4); full << .2, .2, .2, -.3;
+			const Eigen::VectorXd x = problem.full_to_reduced(full);
+			CHECK(x.size() == (al ? 2 : problem.reduced_size()));
+			const auto expanded = problem.reduced_to_full(x);
+			CHECK(expanded[0] == expanded[1]);
+			CHECK(expanded[0] == expanded[2]);
+			if (constrained && !al) CHECK(expanded[0] == Catch::Approx(.25));
+			Eigen::VectorXd grad;
+			StiffnessMatrix hessian;
+			problem.gradient(x, grad);
+			problem.hessian(x, hessian);
+			const double eps = 1e-6;
+			for (int i = 0; i < x.size(); ++i)
+			{
+				Eigen::VectorXd xp = x, xm = x, gp, gm;
+				xp[i] += eps; xm[i] -= eps;
+				CHECK(grad[i] == Catch::Approx((problem.value(xp) - problem.value(xm)) / (2 * eps)).margin(1e-8));
+				problem.gradient(xp, gp); problem.gradient(xm, gm);
+				CHECK((Eigen::VectorXd(hessian.col(i)) - (gp - gm) / (2 * eps)).norm() < 1e-8);
+			}
+		}
+	}
+}
+
+
+TEST_CASE("supplied constraint projections preserve trusted shared displacements", "[degenerate][trusted-collapse]")
+{
+	StiffnessMatrix A(2, 4), Q(4, 2), mass(4, 4);
+	A.insert(0, 0) = -1.; A.insert(0, 1) = 1.;
+	A.insert(1, 0) = -1.; A.insert(1, 2) = 1.;
+	Q.insert(0, 0) = 2.; Q.insert(1, 0) = 2. + 4e-16; Q.insert(2, 0) = 2.; Q.insert(3, 1) = 1.;
+	mass.setIdentity();
+	auto f = std::make_shared<solver::MatrixLagrangianForm>(A, Eigen::MatrixXd::Zero(2, 1), Q, Eigen::MatrixXd::Zero(4, 1));
+	f->set_initial_weight(1.);
+	solver::NLProblem problem(4, 0, {std::make_shared<SharedDofQuadratic>()}, {f},
+		polysolve::linear::Solver::create(json{{"solver", "Eigen::SparseLU"}}, logger()), 1, 1, mass, 1);
+	problem.set_dof_identifications({{0, 1}, {0, 2}});
+	Eigen::VectorXd x(2); x << .123, .456;
+	const auto full = problem.reduced_to_full(x);
+	CHECK(full[0] == full[1]); CHECK(full[0] == full[2]);
+	CHECK(full[0] == 2. * x[0]);
+	CHECK((problem.full_to_reduced(full) - x).norm() < 1e-12);
+	Eigen::VectorXd grad;
+	StiffnessMatrix hessian;
+	problem.gradient(x, grad); problem.hessian(x, hessian);
+	CHECK(grad[0] == Catch::Approx(12. * x[0]));
+	CHECK(hessian.coeff(0, 0) == Catch::Approx(12.));
+	problem.use_full_size();
+	const auto al = problem.full_to_reduced(full);
+	CHECK(al[0] == full[0]);
+	CHECK((problem.reduced_to_full(al).array() == full.array()).all());
+}
+
+
+TEST_CASE("structural ties intersect a supplied constraint nullspace", "[degenerate][trusted-collapse]")
+{
+	StiffnessMatrix A(1, 4), Q(4, 3), mass(4, 4);
+	A.insert(0, 0) = 1.;
+	for (int i = 1; i < 4; ++i) Q.insert(i, i - 1) = 1.;
+	mass.setIdentity();
+	Eigen::VectorXd offset = Eigen::VectorXd::Zero(4); offset[0] = .25;
+	auto f = std::make_shared<solver::MatrixLagrangianForm>(A, Eigen::MatrixXd::Constant(1, 1, .25), Q, offset);
+	f->set_initial_weight(1.);
+	solver::NLProblem problem(4, 0, {std::make_shared<SharedDofQuadratic>()}, {f},
+		polysolve::linear::Solver::create(json{{"solver", "Eigen::SparseLU"}}, logger()), 1, 1, mass, 1);
+	problem.set_dof_identifications({{0, 1}, {0, 2}});
+	CHECK(problem.reduced_size() == 1);
+	const auto full = problem.reduced_to_full(Eigen::VectorXd::Zero(1));
+	CHECK(full[0] == Catch::Approx(.25));
+	CHECK(full[0] == full[1]); CHECK(full[0] == full[2]);
 }
 
 TEST_CASE("cone split children", "[jacobian][degenerate]")
@@ -1320,19 +1502,29 @@ TEST_CASE("ElasticForm integrates degenerate elements with interior quadrature",
 	const Eigen::VectorXi mapping = Eigen::VectorXi::LinSpaced(20, 0, 19);
 	form.load_degenerate_edges(file.path.string(), mapping);
 	REQUIRE(form.degenerate() != nullptr);
+	StiffnessMatrix mass(60, 60); mass.setIdentity();
+	// NLProblem discovers the structural ties from the loaded elastic form.
+	std::shared_ptr<solver::Form> shared_form(&form, [](solver::Form *) {});
+	solver::NLProblem problem(60, 0, {shared_form}, {},
+		polysolve::linear::Solver::create(json{{"solver", "Eigen::SparseLU"}}, logger()), 1, 1, mass, 3);
+	CHECK(problem.reduced_size() == 54);
+	const auto shared = problem.reduced_to_full(Eigen::VectorXd::LinSpaced(54, -.1, .1));
+	CHECK((shared.segment<3>(0).array() == shared.segment<3>(12).array()).all());
+	CHECK((shared.segment<3>(0).array() == shared.segment<3>(27).array()).all());
 
 	polyfem::quadrature::Quadrature before;
 	bs[0].compute_quadrature(before);
 	CHECK(before.points.minCoeff() > 0);
 	CHECK(before.points.rowwise().sum().maxCoeff() < 1);
 	CHECK(before.weights.minCoeff() > 0);
-	CHECK(std::isfinite(form.value(u)));
+	const Eigen::VectorXd zero = Eigen::VectorXd::Zero(60);
+	CHECK(std::isfinite(form.value(zero)));
 	Eigen::VectorXd gradient;
-	form.first_derivative(u, gradient);
+	form.first_derivative(zero, gradient);
 	CHECK(gradient.allFinite());
 
-	// The rest state is not collapsed although the corner is marked: the
-	// collapse has to hold in every configuration that is checked.
+	// The trusted rest collapse is canonicalized; unequal displacements
+	// must still be rejected at motion endpoints.
 	CHECK_THROWS(form.max_step_size(Eigen::VectorXd::Zero(60), u));
 }
 

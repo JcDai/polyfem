@@ -204,8 +204,10 @@ namespace polyfem::utils
 	/// their data. The displacement must be a Bernstein basis of order 3 with
 	/// one global node of weight 1 per local basis function; the geometry
 	/// may be Lagrange or Bernstein of order at most 3 (its Bernstein
-	/// coefficients are computed exactly in interval arithmetic and
-	/// degree-elevated).
+	/// coefficients are computed in interval arithmetic and degree-elevated).
+	/// Declared corners are TRUSTED exact geometric identities, not checked:
+	/// each adjacent control receives the corner's interval after conversion.
+	/// Incorrect declarations change the geometry that is certified.
 	DegenerateMesh make_degenerate_mesh(
 		const int dim,
 		const std::vector<basis::ElementBases> &bases,

@@ -27,6 +27,7 @@ namespace polyfem::solver
 							std::shared_ptr<polysolve::nonlinear::Solver> nl_solverin)
 	{
 		assert(sol.size() == nl_problem.full_size());
+		sol = nl_problem.reduced_to_full(sol);
 
 		const Eigen::VectorXd initial_sol = sol;
 		Eigen::VectorXd tmp_sol = nl_problem.full_to_reduced(sol);
@@ -64,7 +65,7 @@ namespace polyfem::solver
 
 			nl_problem.init(sol);
 			update_barrier_stiffness(sol);
-			tmp_sol = sol;
+			tmp_sol = nl_problem.full_to_reduced(sol);
 
 			try
 			{
@@ -85,7 +86,7 @@ namespace polyfem::solver
 				// 	log_and_throw_error("Reached iteration limit in AL");
 			}
 
-			sol = tmp_sol;
+			sol = nl_problem.reduced_to_full(tmp_sol);
 
 			current_error = 0;
 			for (const auto &f : alagr_forms)
@@ -124,6 +125,7 @@ namespace polyfem::solver
 								 std::shared_ptr<polysolve::nonlinear::Solver> nl_solverin)
 	{
 		assert(sol.size() == nl_problem.full_size());
+		sol = nl_problem.reduced_to_full(sol);
 
 		Eigen::VectorXd tmp_sol = nl_problem.full_to_reduced(sol);
 		nl_problem.use_reduced_size();

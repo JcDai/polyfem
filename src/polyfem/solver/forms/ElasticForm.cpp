@@ -140,7 +140,7 @@ namespace polyfem::solver
 			bs.set_quadrature([quad](Quadrature &quad_) {
 				quad_ = quad;
 			});
-			logger().debug("New number of quadrature points: {}, level: {}", quad.size(), tree.depth());
+			logger().trace("New number of quadrature points: {}, level: {}", quad.size(), tree.depth());
 
 			if (ass_vals_cache.is_initialized())
 				ass_vals_cache.update(invalidID, dim == 3, bs, gbs);

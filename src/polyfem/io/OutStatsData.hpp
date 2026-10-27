@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace polyfem::utils { struct DegenerateMesh; }
+
 namespace polyfem::io
 {
 	/// @brief timers from polyfem.
@@ -139,7 +141,10 @@ namespace polyfem::io
 		/// @brief counts the number of flipped elements
 		/// @param[in] mesh mesh
 		/// @param[in] gbases geometric bases
-		void count_flipped_elements(const polyfem::mesh::Mesh &mesh, const std::vector<polyfem::basis::ElementBases> &gbases);
+		/// @param[in] degenerate Optional declared collapses; certify the rest geometry
+		/// with the conservative corner-aware checker instead of sampled positivity.
+		void count_flipped_elements(const polyfem::mesh::Mesh &mesh, const std::vector<polyfem::basis::ElementBases> &gbases,
+			const utils::DegenerateMesh *degenerate = nullptr);
 
 		/// saves the output statistic to a json object
 		/// @param[in] j output json

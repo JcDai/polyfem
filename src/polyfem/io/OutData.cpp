@@ -1,5 +1,6 @@
 #include "OutData.hpp"
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <set>
@@ -22,6 +23,7 @@
 #include <polyfem/utils/getRSS.h>
 #include <polyfem/utils/EdgeSampler.hpp>
 #include <polyfem/utils/Logger.hpp>
+#include <polyfem/utils/Jacobian.hpp>
 #include <polyfem/utils/par_for.hpp>
 #include <polyfem/utils/BoundarySampler.hpp>
 #include <polyfem/utils/Timer.hpp>
@@ -2964,11 +2966,28 @@ namespace polyfem::io
 		*this = OutStatsData();
 	}
 
-	void OutStatsData::count_flipped_elements(const polyfem::mesh::Mesh &mesh, const std::vector<polyfem::basis::ElementBases> &gbases)
+	void OutStatsData::count_flipped_elements(const polyfem::mesh::Mesh &mesh, const std::vector<polyfem::basis::ElementBases> &gbases,
+		const utils::DegenerateMesh *degenerate)
 	{
 		using namespace mesh;
 
 		logger().info("Counting flipped elements...");
+		// Declared collapsed corners need the same conservative certificate as
+		// the solver: zero at the marked corner is allowed, inversion is not.
+		if (degenerate && !degenerate->empty())
+		{
+			const int n_nodes = *std::max_element(degenerate->dofs.begin(), degenerate->dofs.end()) + 1;
+			const Eigen::VectorXd zero = Eigen::VectorXd::Zero(n_nodes * degenerate->dim);
+			const auto [valid, id, tree] = utils::is_valid(
+				degenerate->dim, {}, gbases, zero, 0, 100000, nullptr, degenerate);
+			if (!valid)
+			{
+				++n_flipped;
+				log_and_throw_error("element {} is flipped or could not be certified with collapsed corners", id);
+			}
+			logger().info(" done");
+			return;
+		}
 		const auto &els_tag = mesh.elements_tag();
 
 		// flipped_elements.clear();

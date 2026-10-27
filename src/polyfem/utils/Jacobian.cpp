@@ -914,6 +914,16 @@ namespace polyfem::utils
 					m.rest_lo(e * m.n_per + i, d) = lower(rest[i][d]);
 					m.rest_hi(e * m.n_per + i, d) = upper(rest[i][d]);
 				}
+			// Trusted declarations assert exact equality of these Bernstein
+			// coefficients. Use one enclosure for the shared geometric value;
+			// independent Lagrange conversions need not produce equal bounds.
+			const auto &corner = m.corners[e];
+			if (corner.vertex >= 0)
+				for (const int near : corner.near_nodes)
+				{
+					m.rest_lo.row(e * m.n_per + near) = m.rest_lo.row(e * m.n_per + corner.vertex);
+					m.rest_hi.row(e * m.n_per + near) = m.rest_hi.row(e * m.n_per + corner.vertex);
+				}
 		}
 #else
 		log_and_throw_error("Enable the Miso library to allow the degenerate Jacobian check!");

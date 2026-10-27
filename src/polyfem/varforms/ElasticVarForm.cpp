@@ -28,6 +28,7 @@
 #include <polyfem/time_integrator/ImplicitTimeIntegrator.hpp>
 #include <polyfem/utils/BoundarySampler.hpp>
 #include <polyfem/utils/Jacobian.hpp>
+#include <polyfem/utils/StringUtils.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
 
 #include <algorithm>
@@ -234,7 +235,19 @@ namespace polyfem::varform
 
 		const auto &current_bases = space_.geometry_basis_list();
 		if (args["space"]["advanced"]["count_flipped_els"])
-			stats.count_flipped_elements(mesh, current_bases);
+		{
+			utils::DegenerateMesh degenerate;
+			const std::string path = args["solver"]["advanced"].value("degenerate_edges", std::string());
+			if (!path.empty())
+			{
+				auto corners = utils::read_degenerate_edges(
+					utils::resolve_path(path, args.value("root_path", std::string()), false),
+					space_.space_in_node_to_node, space_.basis_list());
+				if (!corners.empty())
+					degenerate = utils::make_degenerate_mesh(mesh.dimension(), space_.basis_list(), current_bases, std::move(corners));
+			}
+			stats.count_flipped_elements(mesh, current_bases, &degenerate);
+		}
 
 		const int n_samples = 10;
 		stats.compute_mesh_size(mesh, current_bases, n_samples, args["output"]["advanced"]["curved_mesh_size"]);

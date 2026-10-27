@@ -40,6 +40,9 @@ namespace polyfem::solver
 				  const bool is_residual = false);
 		virtual ~NLProblem() = default;
 
+		// Structural equalities remain eliminated even in the AL phase.
+		void set_dof_identifications(const std::vector<std::pair<int, int>> &pairs);
+		void init(const TVector &x) override;
 		virtual double value(const TVector &x) override;
 		virtual void gradient(const TVector &x, TVector &gradv) override;
 		virtual void hessian(const TVector &x, THessian &hessian) override;
@@ -93,7 +96,7 @@ namespace polyfem::solver
 		CurrentSize current_size_; ///< Current size of the problem (either full or reduced size)
 		int current_size() const
 		{
-			return current_size_ == CurrentSize::FULL_SIZE ? full_size() : reduced_size();
+			return current_size_ == CurrentSize::FULL_SIZE ? structural_size() : reduced_size();
 		}
 
 		Eigen::DiagonalMatrix<double, Eigen::Dynamic> current_lumped_mass() const
@@ -121,6 +124,17 @@ namespace polyfem::solver
 		std::shared_ptr<FullNLProblem> penalty_problem_;
 		int num_penalty_constraints_ = 0;
 
+		// S copies each independent displacement into all identified rows.
+		StiffnessMatrix structural_map_;
+		std::vector<int> structural_roots_, representative_;
+		bool use_constraint_projection_ = false;
+		bool has_identifications() const { return !representative_.empty(); }
+		int structural_size() const { return has_identifications() ? structural_map_.cols() : full_size_; }
+		bool al_phase() const { return current_size_ == CurrentSize::FULL_SIZE; }
+		bool can_project() const { return !has_identifications() && penalty_forms_.size() == 1 && penalty_forms_.front()->can_project(); }
+		TVector canonicalize(const TVector &full) const;
+		void build_dof_identifications(const std::vector<std::pair<int, int>> &pairs);
+		void discover_dof_identifications();
 		void setup_constraints();
 		void update_constraint_values();
 	};
