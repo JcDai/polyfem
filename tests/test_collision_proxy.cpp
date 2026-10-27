@@ -330,7 +330,7 @@ TEST_CASE("Bernstein 2D collision mesh evaluates Lagrange samples", "[collision_
 	V << 0, 0, 1, 0, 0, 1;
 	Eigen::MatrixXi F(1, 3);
 	F << 0, 1, 2;
-	state.load_mesh(V, F);
+	state.set_mesh(V, F);
 	polyfem::test::VarFormTestAccess::prepare(*state.variational_formulation);
 	const auto debug = polyfem::test::VarFormTestAccess::debug_data(*state.variational_formulation);
 	const auto output = state.variational_formulation->output_space();
@@ -392,7 +392,7 @@ TEST_CASE("Bernstein 3D collision mesh evaluates a watertight sampled surface", 
 	V << 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1;
 	Eigen::MatrixXi T(1, 4);
 	T << 0, 1, 2, 3;
-	state.load_mesh(V, T);
+	state.set_mesh(V, T);
 	polyfem::test::VarFormTestAccess::prepare(*state.variational_formulation);
 	const auto debug = polyfem::test::VarFormTestAccess::debug_data(*state.variational_formulation);
 	const auto output = state.variational_formulation->output_space();

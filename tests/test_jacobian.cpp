@@ -588,7 +588,8 @@ TEST_CASE("ElasticForm integrates marked cones with interior quadrature", "[jaco
     const auto geometry = bs;
     assembler::AMIPSEnergy amips;
     amips.set_size(3);
-    amips.add_multimaterial(0, json{{"use_rest_pose", true}}, Units(), "");
+    const io::FileSystemIO resources("");
+    amips.add_multimaterial(0, json{{"use_rest_pose", true}, {"weight", 1.0}}, Units(), resources);
     assembler::AssemblyValsCache cache;
     cache.init_empty(false);
     solver::ElasticForm form(20, bs, geometry, amips, cache, 0, 1, true, 0,
