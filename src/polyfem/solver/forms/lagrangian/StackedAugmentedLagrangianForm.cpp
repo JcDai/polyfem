@@ -40,6 +40,13 @@ namespace polyfem::solver
 			term.form->finish();
 	}
 
+	bool StackedAugmentedLagrangianForm::time_dependent() const
+	{
+		for (const Term &term : terms_)
+			if (term.form->time_dependent()) return true;
+		return false;
+	}
+
 	void StackedAugmentedLagrangianForm::update_quantities(const double t, const Eigen::VectorXd &x)
 	{
 		sync_child_weights();

@@ -282,3 +282,30 @@ TEST_CASE("two periodic directions leave redundant corner constraints to QR", "[
 	CHECK((horizontal->constraint_matrix() * full).norm() < 1e-10);
 	CHECK((vertical->constraint_matrix() * full).norm() < 1e-10);
 }
+
+TEST_CASE("timestamped matrices rebuild the constraint reduction", "[constraints][timestamp]")
+{
+    StiffnessMatrix A0(1, 3), A1(1, 3);
+    A0.insert(0, 0) = 1;
+    A1.insert(0, 1) = 2;
+    Eigen::MatrixXd b0 = Eigen::MatrixXd::Zero(1, 1);
+    Eigen::MatrixXd b1 = Eigen::MatrixXd::Constant(1, 1, 6);
+	std::vector<std::shared_ptr<solver::MatrixLagrangianForm>> frames{
+		std::make_shared<solver::MatrixLagrangianForm>(A0, b0),
+		std::make_shared<solver::MatrixLagrangianForm>(A1, b1)};
+	auto form = std::make_shared<solver::MatrixLagrangianForm>(std::vector<double>{0, 0.1}, frames);
+	std::shared_ptr<polysolve::linear::Solver> linear_solver = polysolve::linear::Solver::create(json({{"solver", "Eigen::SparseLU"}}), logger());
+	StiffnessMatrix mass(3, 3);
+	mass.setIdentity();
+	solver::NLProblem problem(3, 0, {}, {form}, linear_solver, 1, 1, mass, 1);
+	Eigen::VectorXd full = Eigen::VectorXd::Zero(3);
+	problem.update_quantities(0.1, full);
+	const Eigen::VectorXd result = problem.reduced_to_full(Eigen::VectorXd::Zero(problem.reduced_size()));
+	CHECK(std::abs(result(1) - 3) < 1e-10);
+	CHECK((A1 * result - b1).norm() < 1e-10);
+	problem.update_quantities(0, full);
+	const Eigen::VectorXd back = problem.reduced_to_full(Eigen::VectorXd::Zero(problem.reduced_size()));
+	CHECK((A0 * back).norm() < 1e-10);
+	CHECK_THROWS(form->update_quantities(0.05, full));
+	CHECK_THROWS(solver::MatrixLagrangianForm(std::vector<double>{0, 0}, frames));
+}

@@ -1,6 +1,8 @@
 #include "MatrixLagrangianForm.hpp"
 
 #include <polyfem/utils/MatrixUtils.hpp>
+#include <cmath>
+#include <algorithm>
 #include <polyfem/utils/Logger.hpp>
 
 namespace polyfem::solver
@@ -22,6 +24,44 @@ namespace polyfem::solver
 
 		lagr_mults_.resize(A_.rows());
 		lagr_mults_.setZero();
+	}
+
+	MatrixLagrangianForm::MatrixLagrangianForm(const std::vector<double> &times,
+											   const std::vector<std::shared_ptr<MatrixLagrangianForm>> &frames)
+		: times_(times), frames_(frames)
+	{
+		if (times.empty() || times.size() != frames.size())
+			log_and_throw_error("Constraint time sequence must be nonempty with one frame per timestamp");
+		for (size_t i = 0; i < times.size(); ++i)
+			if (!std::isfinite(times[i]) || (i && times[i] <= times[i - 1]))
+				log_and_throw_error("Constraint timestamps must be finite and strictly increasing");
+		update_quantities(times.front(), Eigen::VectorXd());
+	}
+
+	void MatrixLagrangianForm::update_quantities(double t, const Eigen::VectorXd &)
+	{
+		if (times_.empty())
+			return;
+		int index = t <= times_.front() ? 0 : (t >= times_.back() ? int(times_.size()) - 1 : -1);
+		for (size_t i = 0; i < times_.size(); ++i)
+			if (std::abs(t - times_[i]) <= 1e-10 * std::max(1., std::abs(t)))
+			{
+				index = int(i);
+				break;
+			}
+		if (index < 0)
+			log_and_throw_error("No constraint frame matches simulation time {}", t);
+		if (index == active_frame_)
+			return;
+		const auto &frame = *frames_[index];
+		A_ = frame.A_;
+		b_ = frame.b_;
+		A_proj_ = frame.A_proj_;
+		b_proj_ = frame.b_proj_;
+		AtA = frame.AtA;
+		Atb = frame.Atb;
+		lagr_mults_ = Eigen::VectorXd::Zero(A_.rows());
+		active_frame_ = index;
 	}
 
 	double MatrixLagrangianForm::value_unweighted(const Eigen::VectorXd &x) const

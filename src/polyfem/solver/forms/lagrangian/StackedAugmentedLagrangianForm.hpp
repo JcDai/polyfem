@@ -44,6 +44,8 @@ namespace polyfem::solver
 		void update_lagrangian(const Eigen::VectorXd &x, const double k_al) override;
 		double compute_error(const Eigen::VectorXd &x) const override;
 
+		bool time_dependent() const override;
+
 		bool can_project() const override { return has_projection(); }
 		void project_gradient(Eigen::VectorXd &grad) const override;
 		void project_hessian(StiffnessMatrix &hessian) const override;

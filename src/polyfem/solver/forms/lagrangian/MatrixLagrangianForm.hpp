@@ -1,6 +1,8 @@
 #pragma once
 
 #include "AugmentedLagrangianForm.hpp"
+#include <memory>
+#include <vector>
 
 namespace polyfem::solver
 {
@@ -17,6 +19,11 @@ namespace polyfem::solver
 							 const Eigen::MatrixXd &b,
 							 const StiffnessMatrix &A_proj = {},
 							 const Eigen::MatrixXd &b_pro = {});
+
+		MatrixLagrangianForm(const std::vector<double> &times,
+							 const std::vector<std::shared_ptr<MatrixLagrangianForm>> &frames);
+		void update_quantities(double t, const Eigen::VectorXd &x) override;
+		bool time_dependent() const override { return !times_.empty(); }
 
 		std::string name() const override { return "generic-lagrangian"; }
 
@@ -40,6 +47,9 @@ namespace polyfem::solver
 		double compute_error(const Eigen::VectorXd &x) const override;
 
 	private:
+		std::vector<double> times_;
+		std::vector<std::shared_ptr<MatrixLagrangianForm>> frames_;
+		int active_frame_ = -1;
 		StiffnessMatrix AtA;
 		Eigen::VectorXd Atb;
 	};

@@ -944,7 +944,7 @@
         "pointer": "/space/advanced/isoparametric",
         "default": false,
         "type": "bool",
-        "doc": "Forces geometric map basis to be the same degree as the main variable basis, irrespective of the degree associated with the geom. map degrees associated with the elements of the geometry."
+        "doc": "Forces the geometric map to use the main variable basis. With Bernstein, input coordinates are interpreted as Bezier control points."
     },
     {
         "pointer": "/space/advanced/bc_method",

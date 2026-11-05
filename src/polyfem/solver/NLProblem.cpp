@@ -692,7 +692,12 @@ namespace polyfem::solver
 		for (auto &f : penalty_forms_)
 			f->update_quantities(t, full);
 
-		if (!penalty_forms_.empty())
+		bool dynamic_constraints = false;
+		for (const auto &f : penalty_forms_)
+			dynamic_constraints |= f->time_dependent();
+		if (dynamic_constraints)
+			setup_constraints();
+		else if (!penalty_forms_.empty())
 			update_constraint_values();
 	}
 

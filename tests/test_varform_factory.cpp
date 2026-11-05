@@ -636,3 +636,25 @@ TEST_CASE("optimization keeps varforms on the legacy state path", "[varform][sta
 	CHECK(state.pressure_assembler->name() == "StokesPressure");
 	CHECK(state.mixed_assembler != nullptr);
 }
+
+TEST_CASE("Bernstein geometry honors explicit isoparametric selection", "[varform][bernstein]")
+{
+	for (const bool isoparametric : {false, true})
+	{
+		json args = load_scene(std::string(POLYFEM_DATA_DIR) + "/standard/neohookean.json");
+		args.erase("preset_problem");
+		args["geometry"] = {{"mesh", std::string(POLYFEM_DATA_DIR) + "/contact/meshes/2D/simple/square.obj"}};
+		args["materials"] = {{"type", "NeoHookean"}, {"E", 1000}, {"nu", 0.3}};
+		args["boundary_conditions"] = {{"rhs", {0, 0}}};
+		args["space"]["discr_order"] = 3;
+		args["space"]["basis_type"] = "Bernstein";
+		args["/space/advanced/isoparametric"_json_pointer] = isoparametric;
+		State state;
+		state.init(args, true);
+		state.load_mesh();
+		REQUIRE(state.variational_formulation != nullptr);
+		test::VarFormTestAccess::prepare(*state.variational_formulation);
+		const auto debug = test::VarFormTestAccess::debug_data(*state.variational_formulation);
+		CHECK((debug.bases == debug.geometry_bases) == isoparametric);
+	}
+}

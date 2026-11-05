@@ -29,6 +29,9 @@ namespace polyfem::solver
 
 		inline bool has_projection() const { return A_proj_.rows() > 0; }
 
+		/// Whether time updates can change the constraint matrix or its nullspace.
+		virtual bool time_dependent() const { return false; }
+
 		virtual bool can_project() const { return false; }
 		virtual void project_gradient(Eigen::VectorXd &grad) const { assert(false); }
 		virtual void project_hessian(StiffnessMatrix &hessian) const { assert(false); }

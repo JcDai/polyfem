@@ -45,7 +45,7 @@ namespace polyfem::varform
 				return true;
 
 			if (args["space"]["basis_type"] == "Bernstein")
-				return false;
+				return args["space"]["advanced"]["isoparametric"];
 
 			if (args["space"]["basis_type"] == "Spline")
 				return true;
