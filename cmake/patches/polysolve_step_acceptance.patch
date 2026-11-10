@@ -1,0 +1,246 @@
+diff --git a/src/polysolve/Utils.hpp b/src/polysolve/Utils.hpp
+index e6141a1..1f2e6eb 100644
+--- a/src/polysolve/Utils.hpp
++++ b/src/polysolve/Utils.hpp
+@@ -3,6 +3,9 @@
+ #include "Types.hpp"
+
+ #include <spdlog/spdlog.h>
++#include <limits>
++#include <cmath>
++#include <cassert>
+
+ #define POLYSOLVE_SCOPED_STOPWATCH(...) polysolve::StopWatch __polysolve_stopwatch(__VA_ARGS__)
+
+@@ -62,6 +65,33 @@ namespace polysolve
+
+     double extract_param(const std::string &key, const std::string &name, const json &json);
+
++    /// @brief x + s * dx, each coefficient rounded once (fused multiply-add).
++    ///
++    /// Every place the nonlinear solver forms a trial or accepted step goes
++    /// through this, so the configuration it finally takes is bit-for-bit the
++    /// one it checked, and differs from the exact point on the ray by at most
++    /// half an ulp per coefficient. That is what lets a problem certify a
++    /// whole segment and trust any point the line search picks on it.
++    /// std::fma rounds once on every platform (in hardware where available).
++    inline Eigen::VectorXd step_along(const Eigen::VectorXd &x, const double s, const Eigen::VectorXd &dx)
++    {
++        assert(x.size() == dx.size());
++        Eigen::VectorXd out(x.size());
++        for (Eigen::Index i = 0; i < x.size(); ++i)
++            out[i] = std::fma(s, dx[i], x[i]);
++        return out;
++    }
++
++    /// @brief The largest double not above a * b (a, b >= 0), in any rounding
++    /// mode: the fused multiply-add gives the exact rounding error of the
++    /// product, and when the rounded product overshoots it steps down one
++    /// representable value.
++    inline double product_rounded_down(const double a, const double b)
++    {
++        const double p = a * b;
++        return std::fma(a, b, -p) < 0 ? std::nextafter(p, -std::numeric_limits<double>::infinity()) : p;
++    }
++
+     namespace log
+     {
+ #ifdef POLYSOLVE_WITH_UNICODE
+diff --git a/src/polysolve/nonlinear/Problem.hpp b/src/polysolve/nonlinear/Problem.hpp
+index 92711ef..026640a 100644
+--- a/src/polysolve/nonlinear/Problem.hpp
++++ b/src/polysolve/nonlinear/Problem.hpp
+@@ -102,6 +102,28 @@ namespace polysolve::nonlinear
+
+         virtual bool after_line_search_custom_operation(const TVector &x0, const TVector &x1) { return false; }
+
++        /// @brief Last word on a step the line search is about to accept.
++        ///
++        /// Called once a trial step has passed the line search's descent
++        /// criteria, before it is accepted. Returning false rejects it and
++        /// ends the line search as failed, so the solver computes a new
++        /// direction. Unlike is_step_valid(), which runs on every trial point,
++        /// this runs only on steps that would otherwise be taken, so it suits
++        /// checks too expensive to run per trial.
++        ///
++        /// Before returning false the problem may change its own
++        /// discretization (e.g. refine a quadrature where the step was found
++        /// invalid, so that the energy there is no longer finite). Ending the
++        /// line search keeps each one on a single, fixed problem: the change
++        /// only affects the directions and line searches that follow.
++        ///
++        /// Line searches that never backtrack (NoLineSearch) cannot honor a
++        /// rejection and do not call this.
++        /// @param x0 Current solution.
++        /// @param x1 Step the line search is about to accept.
++        /// @return True to accept the step, false to reject it.
++        virtual bool is_step_acceptable(const TVector &x0, const TVector &x1) { return true; }
++
+         /// @brief Callback function used to determine if the solver should stop.
+         /// @param state Current state of the solver.
+         /// @param x Current solution.
+diff --git a/src/polysolve/nonlinear/Solver.cpp b/src/polysolve/nonlinear/Solver.cpp
+index b7c3e8b..1277e81 100644
+--- a/src/polysolve/nonlinear/Solver.cpp
++++ b/src/polysolve/nonlinear/Solver.cpp
+@@ -493,7 +493,7 @@ namespace polysolve::nonlinear
+             }
+
+             {
+-                TVector x1 = x + rate * delta_x;
++                TVector x1 = step_along(x, rate, delta_x);
+                 if (objFunc.after_line_search_custom_operation(x, x1))
+                     objFunc.solution_changed(x1);
+                 x = x1;
+diff --git a/src/polysolve/nonlinear/line_search/Backtracking.cpp b/src/polysolve/nonlinear/line_search/Backtracking.cpp
+index 70f480c..66582a6 100644
+--- a/src/polysolve/nonlinear/line_search/Backtracking.cpp
++++ b/src/polysolve/nonlinear/line_search/Backtracking.cpp
+@@ -27,7 +27,7 @@ namespace polysolve::nonlinear::line_search
+
+         for (; step_size > current_min_step_size() && cur_iter < current_max_step_size_iter(); step_size *= step_ratio, ++cur_iter)
+         {
+-            const TVector new_x = x + step_size * delta_x;
++            const TVector new_x = step_along(x, step_size, delta_x);
+
+             try
+             {
+@@ -54,10 +54,21 @@ namespace polysolve::nonlinear::line_search
+
+             m_logger.trace("ls it: {} {}: {}, {}: {}", cur_iter, log::delta("E"), new_energy - old_energy, log::delta("x"), objFunc.step_norm(delta_x, norm_type));
+
+-            if (criteria(delta_x, objFunc, use_grad_norm, old_energy, old_grad, new_x, new_energy, step_size))
+-            {
++            if (!criteria(delta_x, objFunc, use_grad_norm, old_energy, old_grad, new_x, new_energy, step_size))
++                continue;
++
++            if (objFunc.is_step_acceptable(x, new_x))
+                 break; // found a good step size
+-            }
++
++            // Rejected. The problem may have changed its discretization, and
++            // delta_x was computed for the old one, so do not keep searching
++            // along it: fail through the caller's usual path (which restores
++            // x and ends the line search), and the solver computes a new
++            // direction on the problem as it is now. Each line search thus
++            // works on a single, fixed problem.
++            m_logger.debug("Step of size {} rejected by the problem; ending the line search", step_size);
++            problem_changed = true;
++            return 0;
+         }
+
+         return step_size;
+diff --git a/src/polysolve/nonlinear/line_search/LineSearch.cpp b/src/polysolve/nonlinear/line_search/LineSearch.cpp
+index 515a44f..6efb56a 100644
+--- a/src/polysolve/nonlinear/line_search/LineSearch.cpp
++++ b/src/polysolve/nonlinear/line_search/LineSearch.cpp
+@@ -16,8 +16,6 @@
+ #include <spdlog/fmt/bundled/color.h>
+ #endif
+
+-#include <cfenv>
+-
+ namespace polysolve::nonlinear::line_search
+ {
+     static constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
+@@ -84,6 +82,7 @@ namespace polysolve::nonlinear::line_search
+             POLYSOLVE_SCOPED_STOPWATCH("LS begin", m_logger);
+
+             cur_iter = 0;
++            problem_changed = false;
+
+             initial_energy = objFunc(x);
+             if (std::isnan(initial_energy))
+@@ -121,7 +120,7 @@ namespace polysolve::nonlinear::line_search
+         // -----------------------------
+         {
+             POLYSOLVE_SCOPED_STOPWATCH("Line Search Begin - CCD broad-phase", broad_phase_ccd_time, m_logger);
+-            TVector new_x = x + step_size * delta_x;
++            TVector new_x = step_along(x, step_size, delta_x);
+             objFunc.line_search_begin(x, new_x);
+         }
+
+@@ -155,7 +154,7 @@ namespace polysolve::nonlinear::line_search
+             }
+         }
+
+-        const double cur_energy = objFunc(x + step_size * delta_x);
++        const double cur_energy = objFunc(step_along(x, step_size, delta_x));
+
+         const double descent_step_size = step_size;
+
+@@ -167,8 +166,9 @@ namespace polysolve::nonlinear::line_search
+                          step_size, objFunc.step_norm(delta_x, norm_type), use_grad_norm, cur_iter);
+             objFunc.solution_changed(x);
+
+-            // tolerance for rounding error due to multithreading
+-            assert(abs(initial_energy - objFunc(x)) < 1e-15);
++            // tolerance for rounding error due to multithreading; the energy at
++            // x only has to match if the problem did not change underneath us
++            assert(problem_changed || abs(initial_energy - objFunc(x)) < 1e-15);
+
+             objFunc.line_search_end();
+             return NaN;
+@@ -194,7 +194,7 @@ namespace polysolve::nonlinear::line_search
+         const double rate)
+     {
+         double step_size = starting_step_size;
+-        TVector new_x = x + step_size * delta_x;
++        TVector new_x = step_along(x, step_size, delta_x);
+
+         // Find step that does not result in nan or infinite energy
+         while (step_size > current_min_step_size() && cur_iter < current_max_step_size_iter())
+@@ -202,7 +202,7 @@ namespace polysolve::nonlinear::line_search
+             if (!objFunc.is_step_valid(x, new_x) || !std::isfinite(objFunc(new_x)))
+             {
+                 step_size *= rate;
+-                new_x = x + step_size * delta_x;
++                new_x = step_along(x, step_size, delta_x);
+             }
+             else
+             {
+@@ -230,7 +230,7 @@ namespace polysolve::nonlinear::line_search
+         const double starting_step_size)
+     {
+         double step_size = starting_step_size;
+-        TVector new_x = x + step_size * delta_x;
++        TVector new_x = step_along(x, step_size, delta_x);
+
+         // Find step that is collision free
+         double max_step_size = objFunc.max_step_size(x, new_x);
+@@ -242,13 +242,11 @@ namespace polysolve::nonlinear::line_search
+             return NaN;
+         }
+
+-        {
+-            // #pragma STDC FENV_ACCESS ON
+-            const int current_round = std::fegetround();
+-            std::fesetround(FE_DOWNWARD);
+-            step_size *= max_step_size; // TODO: check me if correct
+-            std::fesetround(current_round);
+-        }
++        // Round the capped step down, so it never exceeds the certified
++        // fraction of the segment. Unlike switching the FPU to FE_DOWNWARD
++        // around the multiply, this does not depend on the compiler honoring
++        // the rounding mode (no FENV_ACCESS or -frounding-math needed).
++        step_size = product_rounded_down(step_size, max_step_size);
+
+         return step_size;
+     }
+diff --git a/src/polysolve/nonlinear/line_search/LineSearch.hpp b/src/polysolve/nonlinear/line_search/LineSearch.hpp
+index ad9ebbd..2c9de04 100644
+--- a/src/polysolve/nonlinear/line_search/LineSearch.hpp
++++ b/src/polysolve/nonlinear/line_search/LineSearch.hpp
+@@ -99,6 +99,12 @@ namespace polysolve::nonlinear::line_search
+         double step_ratio;
+         int cur_iter;
+
++        /// Set when Problem::is_step_acceptable() rejected a step, which ends
++        /// the line search. The problem may have changed in the process (e.g.
++        /// refined its discretization), so its energy at x may then differ
++        /// from the one the line search started from.
++        bool problem_changed = false;
++
+     private:
+         /// @brief Compute step size that avoids nan/infinite energy
+         /// @param x Current input (n x 1)
