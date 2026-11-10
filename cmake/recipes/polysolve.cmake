@@ -8,4 +8,6 @@ endif()
 message(STATUS "Third-party: creating target 'polysolve'")
 
 include(CPM)
-CPMAddPackage("gh:polyfem/polysolve#7ab0a759d82d8870c3e9edbfe5a74414e6803440")
+
+CPMDeclarePackage(eigen NAME eigen GIT_REPOSITORY https://eigen.googlesource.com/mirror GIT_TAG 5.0.1 DOWNLOAD_ONLY ON)
+CPMAddPackage("gh:polyfem/polysolve#4d4982663719827ca90632b7e6323a139f8d23dd")
