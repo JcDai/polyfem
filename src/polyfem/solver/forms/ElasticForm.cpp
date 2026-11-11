@@ -8,6 +8,7 @@
 #include <polyfem/utils/Logger.hpp>
 #include <polyfem/utils/Timer.hpp>
 #include <polyfem/utils/Jacobian.hpp>
+#include <polyfem/utils/Experiments.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -281,6 +282,8 @@ namespace polyfem::solver
 		for (auto &t : quadrature_hierarchy_)
 			t = Tree();
 		pending_refinement_.reset();
+		recompute_ = false;
+		retries_ = 0;
 	}
 
 	double ElasticForm::max_step_size(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) const
@@ -321,6 +324,35 @@ namespace polyfem::solver
 						 "Jacobian max step size: {} at element {}, invalid step size: {}, runtime {} sec, tree depth {}", step, invalidID, invalidStep, transient_check_time, subdivision_tree.depth());
 		}
 
+		// Stop short of the certified step (see the end of this function).
+		constexpr double margin = 0.9;
+
+		// experiments/check_inversion_retry: refine at x0 now and, if the
+		// quadrature changed, ask the solver to recompute the direction at x0
+		// instead of taking the truncated step. A step is taken once the
+		// quadrature no longer changes, or after max_retries.
+		const auto &retry = experiments::settings().check_inversion_retry;
+		if (retry.enabled && invalidID >= 0 && retries_ < retry.max_retries)
+		{
+			// Refining next to a designed zero (degenerate corner) can put a
+			// point where det F is 0/0 at x0; undo such a refinement.
+			const Tree saved = quadrature_hierarchy_[invalidID];
+			if (commit_refinement(invalidID, subdivision_tree))
+			{
+				if (std::isfinite(element_energy(invalidID, x0)))
+				{
+					recompute_ = true;
+					++retries_;
+					pending_refinement_.reset();
+					logger().debug("Retry: quadrature of element {} refined at x0; recomputing the direction (retry {})", invalidID, retries_);
+					return step < 1 ? margin * step : step;
+				}
+				logger().debug("Retry: refinement of element {} makes its energy non-finite at x0; reverted", invalidID);
+				quadrature_hierarchy_[invalidID] = saved;
+				update_quadrature(invalidID, dim, quadrature_hierarchy_[invalidID], quadrature_order_, bases_[invalidID], geom_bases_[invalidID], ass_vals_cache_, degenerate_ != nullptr);
+			}
+		}
+
 		if (invalidID >= 0 && step == 0)
 		{
 			// A step of 0 can never be accepted, so it will never reach
@@ -350,7 +382,6 @@ namespace polyfem::solver
 		// certify any step from there, and the solve stalls. The margin is still
 		// inside the certified range, which the widening in max_time_step()
 		// covers at any correctly rounded point.
-		constexpr double margin = 0.9;
 		return step < 1 ? margin * step : step;
 	}
 
@@ -435,6 +466,7 @@ namespace polyfem::solver
 
 	void ElasticForm::post_step(const polysolve::nonlinear::PostStepData &data)
 	{
+		retries_ = 0;
 		if (!pending_refinement_.has_value())
 			return;
 
@@ -444,21 +476,41 @@ namespace polyfem::solver
 		pending_refinement_.reset();
 	}
 
-	void ElasticForm::commit_refinement(const int id, utils::Tree &subdivision_tree, const int max_depth) const
+	bool ElasticForm::commit_refinement(const int id, utils::Tree &subdivision_tree, const int max_depth) const
 	{
 		if (!refines_quadrature_)
-			return;
+			return false;
 
 		const int dim = is_volume_ ? 3 : 2;
 
 		// Merge into quadrature_hierarchy_ and rebuild the live quadrature for
 		// this element, if the tree is actually refined.
-		if (quadrature_hierarchy_[id].merge(subdivision_tree, max_depth))
-		{
-			auto &bs = bases_[id];
-			auto &gbs = geom_bases_[id];
-			update_quadrature(id, dim, quadrature_hierarchy_[id], quadrature_order_, bs, gbs, ass_vals_cache_, degenerate_ != nullptr);
-		}
+		if (!quadrature_hierarchy_[id].merge(subdivision_tree, max_depth))
+			return false;
+		auto &bs = bases_[id];
+		auto &gbs = geom_bases_[id];
+		update_quadrature(id, dim, quadrature_hierarchy_[id], quadrature_order_, bs, gbs, ass_vals_cache_, degenerate_ != nullptr);
+		return true;
+	}
+
+	bool ElasticForm::direction_needs_recompute()
+	{
+		const bool r = recompute_;
+		recompute_ = false;
+		return r;
+	}
+
+	double ElasticForm::element_energy(const int e, const Eigen::VectorXd &x) const
+	{
+		const auto *nl = dynamic_cast<const NLAssembler *>(&assembler_);
+		if (!nl)
+			return 0; // linear assemblers are always finite
+		ElementAssemblyValues vals;
+		ass_vals_cache_.compute(e, is_volume_, bases_[e], geom_bases_[e], vals);
+		const QuadratureVector da = vals.det.array() * vals.quadrature.weights.array();
+		const Eigen::MatrixXd xm = x;
+		const Eigen::MatrixXd xp = x_prev_.size() == x.size() ? Eigen::MatrixXd(x_prev_) : xm;
+		return nl->compute_energy(NonLinearAssemblerData(vals, t_, dt_, xm, xp, da));
 	}
 
 	double ElasticForm::min_quadrature_det(const Eigen::VectorXd &x) const

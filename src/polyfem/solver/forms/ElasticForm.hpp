@@ -141,6 +141,7 @@ namespace polyfem::solver
 		/// @brief Commit the quadrature refinement candidate found by the
 		/// most recent max_step_size() call, once the step is accepted.
 		void post_step(const polysolve::nonlinear::PostStepData &data) override;
+		bool direction_needs_recompute() override;
 
 		/// Smallest det F over the live quadrature points, from the same robust
 		/// evaluation as robust AMIPS (ratio of the reference dets of the
@@ -177,7 +178,11 @@ namespace polyfem::solver
 		/// @param max_depth Most levels to add in one merge. The continuous check
 		/// adds two at a time; the static check merges its whole witness path,
 		/// since only the deepest level puts a quadrature point on the violation.
-		void commit_refinement(const int id, utils::Tree &subdivision_tree, const int max_depth = 2) const;
+		/// @return True if the quadrature of @p id changed.
+		bool commit_refinement(const int id, utils::Tree &subdivision_tree, const int max_depth = 2) const;
+
+		/// Energy of element @p e alone at @p x, with its live quadrature.
+		double element_energy(const int e, const Eigen::VectorXd &x) const;
 
 		Eigen::VectorXd x_prev_;
 
@@ -208,6 +213,8 @@ namespace polyfem::solver
 		/// last max_step_size() call; replaced (not accumulated) each call,
 		/// committed in post_step() once a step is accepted.
 		mutable std::optional<std::pair<int, utils::Tree>> pending_refinement_;
+		mutable bool recompute_ = false; ///< see direction_needs_recompute()
+		mutable int retries_ = 0;        ///< recomputes requested since the last accepted step
 
 		/// @brief Cumulative cost of the conservative checks, reported by
 		/// finish() at the end of each nonlinear solve.

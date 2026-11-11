@@ -41,6 +41,19 @@ namespace polyfem::experiments
 			double max_scale = 100;
 			double det_threshold = 1e-9;
 		} adaptive_elastic_stiffness;
+
+		/// When the continuous inversion check cuts a step, refine the blocking
+		/// element's quadrature at x0 (as an accepted capped step would) and,
+		/// if that changed the quadrature, have the solver recompute the
+		/// direction at x0 instead of taking the truncated step; at most
+		/// max_retries times between accepted steps. Needs polysolve with
+		/// Problem::direction_needs_recompute (cmake/patches/
+		/// polysolve_direction_recompute.patch).
+		struct CheckInversionRetry
+		{
+			bool enabled = false;
+			int max_retries = 5;
+		} check_inversion_retry;
 	};
 
 	/// The process-wide settings.

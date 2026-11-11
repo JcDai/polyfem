@@ -18,4 +18,5 @@ CPMAddPackage(
     GITHUB_REPOSITORY polyfem/polysolve
     GIT_TAG 621e8fb3889717a33c4fa33a608052e9d7459e63
     PATCH_COMMAND "${GIT_EXECUTABLE}" apply "${CMAKE_CURRENT_LIST_DIR}/../patches/polysolve_step_acceptance.patch"
+          COMMAND "${GIT_EXECUTABLE}" apply "${CMAKE_CURRENT_LIST_DIR}/../patches/polysolve_direction_recompute.patch"
 )

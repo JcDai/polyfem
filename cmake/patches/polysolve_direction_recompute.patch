@@ -1,0 +1,112 @@
+diff --git a/src/polysolve/nonlinear/Problem.hpp b/src/polysolve/nonlinear/Problem.hpp
+index 91edbd3..256719e 100644
+--- a/src/polysolve/nonlinear/Problem.hpp
++++ b/src/polysolve/nonlinear/Problem.hpp
+@@ -89,6 +89,13 @@ namespace polysolve::nonlinear
+         /// @return Maximum step size.
+         virtual double max_step_size(const TVector &x0, const TVector &x1) { return 1; }
+ 
++        /// Asked right after max_step_size(): true if the objective changed at
++        /// x0 (e.g. its quadrature was refined) so that the current direction is
++        /// stale. The line search then stops without a step and the solver
++        /// recomputes the direction at the same x, without changing strategy.
++        /// Reading it resets it.
++        virtual bool direction_needs_recompute() { return false; }
++
+         // --- Callbacks ------------------------------------------------------
+ 
+         /// @brief Callback function for the start of a line search.
+diff --git a/src/polysolve/nonlinear/Solver.cpp b/src/polysolve/nonlinear/Solver.cpp
+index 57b1ea9..03b2638 100644
+--- a/src/polysolve/nonlinear/Solver.cpp
++++ b/src/polysolve/nonlinear/Solver.cpp
+@@ -289,6 +289,9 @@ namespace polysolve::nonlinear
+ 
+         double initial_grad_norm;
+         double initial_delta_x_norm;
++        // Set once: a recompute at the same x (Problem::direction_needs_recompute)
++        // stays in iteration 0 but must not move the reference.
++        bool have_initial_norms = false;
+ 
+         do
+         {
+@@ -326,7 +329,8 @@ namespace polysolve::nonlinear
+             m_current.gradNorm = compute_grad_norm(objFunc, x, grad);
+             if (m_current.iterations == 0)
+             {
+-                initial_grad_norm = m_current.gradNorm;
++                if (!have_initial_norms)
++                    initial_grad_norm = m_current.gradNorm;
+                 m_current.relGradNorm = NaN;
+             }
+             else
+@@ -366,7 +370,9 @@ namespace polysolve::nonlinear
+             m_current.xDelta = objFunc.step_norm(delta_x, m_norm_type);
+             if (m_current.iterations == 0)
+             {
+-                initial_delta_x_norm = m_current.xDelta;
++                if (!have_initial_norms)
++                    initial_delta_x_norm = m_current.xDelta;
++                have_initial_norms = true;
+                 m_current.relXDelta = NaN;
+             }
+             else
+@@ -477,6 +483,13 @@ namespace polysolve::nonlinear
+             }
+             m_current.alpha = rate;
+ 
++            if (std::isnan(rate) && m_line_search->recompute_requested)
++            {
++                objFunc.solution_changed(x);
++                m_logger.debug("[{}][{}] Objective changed at x; recomputing the direction", descent_strategy_name(), m_line_search->name());
++                continue;
++            }
++
+             if (std::isnan(rate))
+             {
+                 const auto current_name = descent_strategy_name();
+diff --git a/src/polysolve/nonlinear/line_search/LineSearch.cpp b/src/polysolve/nonlinear/line_search/LineSearch.cpp
+index b456562..9ebda10 100644
+--- a/src/polysolve/nonlinear/line_search/LineSearch.cpp
++++ b/src/polysolve/nonlinear/line_search/LineSearch.cpp
+@@ -86,6 +86,7 @@ namespace polysolve::nonlinear::line_search
+ 
+             cur_iter = 0;
+             problem_changed = false;
++            recompute_requested = false;
+ 
+             initial_energy = objFunc(x);
+             if (std::isnan(initial_energy))
+@@ -131,6 +132,14 @@ namespace polysolve::nonlinear::line_search
+             POLYSOLVE_SCOPED_STOPWATCH("CCD narrow-phase", narrow_phase_ccd_time, m_logger);
+             m_logger.trace("Performing narrow-phase CCD");
+             step_size = compute_max_step_size(x, delta_x, objFunc, step_size);
++            if (objFunc.direction_needs_recompute())
++            {
++                m_logger.debug("Line search stopped: objective changed at x, recomputing the direction");
++                if (!std::isnan(step_size))
++                    objFunc.line_search_end();
++                recompute_requested = true;
++                return NaN;
++            }
+             if (std::isnan(step_size))
+                 return NaN;
+         }
+diff --git a/src/polysolve/nonlinear/line_search/LineSearch.hpp b/src/polysolve/nonlinear/line_search/LineSearch.hpp
+index f20e612..8e8fb4b 100644
+--- a/src/polysolve/nonlinear/line_search/LineSearch.hpp
++++ b/src/polysolve/nonlinear/line_search/LineSearch.hpp
+@@ -107,6 +107,13 @@ namespace polysolve::nonlinear::line_search
+         /// from the one the line search started from.
+         bool problem_changed = false;
+ 
++    public:
++        /// Set when the last line_search() stopped because the objective asked
++        /// for the direction to be recomputed (Problem::direction_needs_recompute).
++        bool recompute_requested = false;
++
++    protected:
++
+     private:
+         /// @brief Compute step size that avoids nan/infinite energy
+         /// @param x Current input (n x 1)

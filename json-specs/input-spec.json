@@ -33,7 +33,8 @@
             "robust_jacobian",
             "softening_eps",
             "subtract_rest_value",
-            "adaptive_elastic_stiffness"
+            "adaptive_elastic_stiffness",
+            "check_inversion_retry"
         ],
         "doc": "Experimental options, all off by default. They apply to the whole process."
     },
@@ -86,6 +87,29 @@
         "type": "float",
         "min": 0,
         "doc": "kappa is doubled when the smallest det F over the elastic quadrature points is below this and decreasing (IPC's distance threshold is 1e-9 times the bounding box diagonal)."
+    },
+    {
+        "pointer": "/experiments/check_inversion_retry",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "enabled",
+            "max_retries"
+        ],
+        "doc": "When the continuous inversion check cuts a step, refine the blocking element's quadrature at the current point and, if that changed the quadrature, recompute the direction there instead of taking the truncated step."
+    },
+    {
+        "pointer": "/experiments/check_inversion_retry/enabled",
+        "default": false,
+        "type": "bool",
+        "doc": "Enable recomputing the direction after a cut step."
+    },
+    {
+        "pointer": "/experiments/check_inversion_retry/max_retries",
+        "default": 5,
+        "type": "int",
+        "min": 0,
+        "doc": "Most recomputations between two accepted steps; after that the truncated step is taken."
     },
     {
         "pointer": "/common",

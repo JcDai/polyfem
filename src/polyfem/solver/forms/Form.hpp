@@ -77,6 +77,11 @@ namespace polyfem::solver
 		/// @return Maximum allowable step size
 		virtual double max_step_size(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) const { return 1; }
 
+		/// True if the form changed at x0 during max_step_size() (e.g. refined
+		/// its quadrature) so that the current direction is stale. Reading it
+		/// resets it.
+		virtual bool direction_needs_recompute() { return false; }
+
 		/// @brief Initialize variables used during the line search
 		/// @param x0 Current solution
 		/// @param x1 Next solution

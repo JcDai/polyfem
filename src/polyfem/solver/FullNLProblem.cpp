@@ -143,6 +143,14 @@ namespace polyfem::solver
 		}
 	}
 
+	bool FullNLProblem::direction_needs_recompute()
+	{
+		bool r = false;
+		for (auto &f : forms_)
+			r = f->direction_needs_recompute() || r; // read every flag, so all reset
+		return r;
+	}
+
 	void FullNLProblem::solution_changed(const TVector &x)
 	{
 		for (auto &f : forms_)

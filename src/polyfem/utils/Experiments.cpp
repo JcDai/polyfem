@@ -27,6 +27,13 @@ namespace polyfem::experiments
 				t.max_scale = a.value("max_scale", t.max_scale);
 				t.det_threshold = a.value("det_threshold", t.det_threshold);
 			}
+			if (e.contains("check_inversion_retry") && e["check_inversion_retry"].is_object())
+			{
+				const json &r = e["check_inversion_retry"];
+				auto &t = s.check_inversion_retry;
+				t.enabled = r.value("enabled", t.enabled);
+				t.max_retries = r.value("max_retries", t.max_retries);
+			}
 		}
 		settings() = s;
 
@@ -35,6 +42,9 @@ namespace polyfem::experiments
 		if (s.adaptive_elastic_stiffness.enabled)
 			logger().info("Experiments: adaptive elastic stiffness, kappa in [1, {}], doubling below det F {}",
 						  s.adaptive_elastic_stiffness.max_scale, s.adaptive_elastic_stiffness.det_threshold);
+		if (s.check_inversion_retry.enabled)
+			logger().info("Experiments: recompute the direction when the inversion check cuts a step (at most {} times per step)",
+						  s.check_inversion_retry.max_retries);
 
 		if (s.robust_jacobian)
 			logger().info("Experiments: robust det J in AMIPS");
