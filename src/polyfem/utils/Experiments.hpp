@@ -2,6 +2,8 @@
 
 #include <polyfem/Common.hpp>
 
+#include <string>
+
 namespace polyfem::experiments
 {
 	/// Experimental options from the "experiments" section of the input JSON.
@@ -54,6 +56,10 @@ namespace polyfem::experiments
 			bool enabled = false;
 			int max_retries = 5;
 		} check_inversion_retry;
+
+		/// Directory for the energy trace CSV files (solver/EnergyTrace.hpp);
+		/// empty = off.
+		std::string energy_trace;
 	};
 
 	/// The process-wide settings.

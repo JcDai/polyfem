@@ -34,6 +34,7 @@ namespace polyfem::experiments
 				t.enabled = r.value("enabled", t.enabled);
 				t.max_retries = r.value("max_retries", t.max_retries);
 			}
+			s.energy_trace = e.value("energy_trace", s.energy_trace);
 		}
 		settings() = s;
 

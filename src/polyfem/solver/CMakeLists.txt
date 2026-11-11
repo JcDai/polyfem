@@ -1,6 +1,8 @@
 set(SOURCES
 	ALSolver.cpp
 	ALSolver.hpp
+	EnergyTrace.cpp
+	EnergyTrace.hpp
 	FullNLProblem.cpp
 	FullNLProblem.hpp
 	NLProblem.cpp

@@ -139,6 +139,8 @@ namespace polyfem::solver
 		/// experiments/adaptive_elastic_stiffness: set (first call of a solve)
 		/// or update (after an accepted step) the elastic form's weight.
 		void update_adaptive_elastic_stiffness(const TVector &full);
+		/// experiments/energy_trace: append every form's energy at @p full.
+		void trace_energies(const TVector &full, const TVector &reduced_grad) const;
 		bool adaptive_initialized_ = false;
 		double adaptive_prev_min_det_ = std::numeric_limits<double>::infinity();
 		void setup_constraints();

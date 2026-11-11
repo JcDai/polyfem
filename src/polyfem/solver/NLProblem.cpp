@@ -1,6 +1,7 @@
 #include "NLProblem.hpp"
 #include <polyfem/solver/forms/ElasticForm.hpp>
 #include <polyfem/utils/Experiments.hpp>
+#include <polyfem/solver/EnergyTrace.hpp>
 #include <numeric>
 
 #include <polyfem/io/OBJWriter.hpp>
@@ -227,6 +228,34 @@ namespace polyfem::solver
 		FullNLProblem::init(has_identifications() ? reduced_to_full(x) : x);
 		adaptive_initialized_ = false;
 		adaptive_prev_min_det_ = std::numeric_limits<double>::infinity();
+		if (energy_trace::enabled())
+		{
+			++energy_trace::counters().solve;
+			energy_trace::counters().state = -1;
+		}
+	}
+
+	void NLProblem::trace_energies(const TVector &full, const TVector &reduced_grad) const
+	{
+		// Long format (one row per form) so that solves with different forms
+		// share one file. Values are weighted, as the solver sees them.
+		auto &c = energy_trace::counters();
+		auto &out = energy_trace::csv("iterations.csv", "solve,state,form,value");
+		double total = 0;
+		for (const auto &f : forms_)
+		{
+			if (!f->enabled())
+				continue;
+			const double v = f->value(full);
+			total += v;
+			out << c.solve << ',' << c.state << ',' << f->name() << ',' << v << '\n';
+			if (std::dynamic_pointer_cast<ElasticForm>(f))
+				out << c.solve << ',' << c.state << ",elastic_weight," << f->weight() << '\n';
+		}
+		out << c.solve << ',' << c.state << ",total," << total << '\n';
+		out << c.solve << ',' << c.state << ",grad_norm," << reduced_grad.norm() << '\n';
+		out << c.solve << ',' << c.state << ",grad_norm_inf," << reduced_grad.lpNorm<Eigen::Infinity>() << '\n';
+		out.flush();
 	}
 
 	void NLProblem::update_adaptive_elastic_stiffness(const TVector &full)
@@ -866,6 +895,14 @@ namespace polyfem::solver
 
 		if (penalty_problem_ && al_phase())
 			penalty_problem_->post_step(polysolve::nonlinear::PostStepData(data.iter_num, data.solver_info, reduced_to_full(data.x), reduced_to_full(data.grad)));
+
+		if (energy_trace::enabled())
+		{
+			// After the forms' post_step, so the elastic energy is measured with
+			// the quadrature the next line search starts from.
+			++energy_trace::counters().state;
+			trace_energies(reduced_to_full(data.x), data.grad);
+		}
 
 		// TODO: add me back
 		static int nsolves = 0;
