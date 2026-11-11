@@ -30,7 +30,8 @@
         "default": null,
         "type": "object",
         "optional": [
-            "robust_jacobian"
+            "robust_jacobian",
+            "softening_eps"
         ],
         "doc": "Experimental options, all off by default. They apply to the whole process."
     },
@@ -39,6 +40,13 @@
         "default": false,
         "type": "bool",
         "doc": "AMIPS takes det F from the robust (certified) evaluation the conservative inversion checks use, as the ratio of the reference determinants of the deformed and rest maps, instead of from F in floating point. Only used with a conservative inversion check (solver/advanced/check_inversion)."
+    },
+    {
+        "pointer": "/experiments/softening_eps",
+        "default": 0,
+        "type": "float",
+        "min": 0,
+        "doc": "Softening of AMIPS: tr(F^T F) is replaced by S(T) = T + eps (1 - T/eps)^3 for T < eps, which keeps the energy finite as F shrinks to zero while keeping it C2 and at or above the unsoftened value. 0 disables it. Requires robust_jacobian."
     },
     {
         "pointer": "/common",

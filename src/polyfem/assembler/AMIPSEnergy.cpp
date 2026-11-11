@@ -191,8 +191,18 @@ namespace polyfem::assembler
 				break;
 			}
 
-			// W = w B^k, B = T J^-a / n, T = |F|^2, with J an independent input.
-			const double T = F.squaredNorm();
+			// W = w B^k, B = S(T) J^-a / n, T = |F|^2, with J an independent input
+			// and S the softening of the numerator (identity unless eps > 0).
+			const double eps = experiments::settings().softening_eps;
+			const double T0 = F.squaredNorm();
+			double T = T0, S1 = 1, S2 = 0; // S(T0), S'(T0), S''(T0)
+			if (eps > 0 && T0 < eps)
+			{
+				const double r = 1 - T0 / eps;
+				T = T0 + eps * r * r * r;
+				S1 = 1 - 3 * r * r;
+				S2 = 6 * r / eps;
+			}
 			const double Ja = std::pow(J, -a) / n;
 			const double B = T * Ja;
 			if (energy)
@@ -204,8 +214,8 @@ namespace polyfem::assembler
 			det_derivatives(F, dJ, d2J);
 			const Eigen::Map<const Eigen::VectorXd> f(F.data(), F.size());
 			const Eigen::Map<const Eigen::VectorXd> c(dJ.data(), dJ.size());
-			// dB/dF = 2 F J^-a / n - a (B / J) dJ/dF
-			const Eigen::VectorXd dB = 2 * Ja * f - a * B / J * c;
+			// dB/dF = 2 S' F J^-a / n - a (B / J) dJ/dF
+			const Eigen::VectorXd dB = 2 * S1 * Ja * f - a * B / J * c;
 
 			if (gradient)
 			{
@@ -216,10 +226,13 @@ namespace polyfem::assembler
 
 			if (hessian)
 			{
-				// d2B = 2 J^-a/n I - 2 a J^(-a-1)/n (c f^T + f c^T) + T (a (a+1) J^(-a-2)/n c c^T - a J^(-a-1)/n d2J)
+				// d2B = 2 S' J^-a/n I + 4 S'' J^-a/n f f^T - 2 a S' J^(-a-1)/n (c f^T + f c^T)
+				//       + S (a (a+1) J^(-a-2)/n c c^T - a J^(-a-1)/n d2J)
 				const double Ja1 = Ja / J, Ja2 = Ja1 / J;
-				Eigen::MatrixXd d2B = 2 * Ja * Eigen::MatrixXd::Identity(dim * dim, dim * dim);
-				d2B.noalias() -= 2 * a * Ja1 * (c * f.transpose() + f * c.transpose());
+				Eigen::MatrixXd d2B = 2 * S1 * Ja * Eigen::MatrixXd::Identity(dim * dim, dim * dim);
+				if (S2 != 0)
+					d2B.noalias() += 4 * S2 * Ja * (f * f.transpose());
+				d2B.noalias() -= 2 * a * S1 * Ja1 * (c * f.transpose() + f * c.transpose());
 				d2B.noalias() += T * (a * (a + 1) * Ja2 * (c * c.transpose()) - a * Ja1 * d2J);
 				Eigen::MatrixXd d2W = w * k * std::pow(B, k - 1) * d2B;
 				if (k != 1)

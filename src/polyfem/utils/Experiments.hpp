@@ -14,6 +14,12 @@ namespace polyfem::experiments
 		/// dets of the deformed and rest maps, instead of from F in floating
 		/// point. Only with a conservative inversion check.
 		bool robust_jacobian = false;
+
+		/// Softening of AMIPS: tr(F^T F) is replaced by
+		/// S(T) = T + eps (1 - T / eps)^3 for T < eps (C2, S >= T, so the
+		/// energy keeps its minimum). 0 = off. Robust path only, so it needs
+		/// robust_jacobian.
+		double softening_eps = 0;
 	};
 
 	/// The process-wide settings.

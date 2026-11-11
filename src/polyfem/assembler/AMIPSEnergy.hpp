@@ -110,8 +110,10 @@ namespace polyfem::assembler
 		/// (ElementAssemblyValues::eval_deformed_jacobian_determinant), as the
 		/// ratio of the reference dets of the deformed and rest maps, rather
 		/// than from F in floating point; the energy, gradient and Hessian are
-		/// those of W(F, J) = w (tr(F^T F) / J^(2/d) / n)^power with dJ/dF from
-		/// F (n = d if normalized, else 1). Otherwise the GenericElastic path.
+		/// those of W(F, J) = w (S(tr(F^T F)) / J^(2/d) / n)^power with dJ/dF
+		/// from F (n = d if normalized, else 1; S the softening of
+		/// experiments/softening_eps, identity if 0). Otherwise the
+		/// GenericElastic path.
 		using GenericElastic<AMIPSEnergy>::assemble_energy;
 		using GenericElastic<AMIPSEnergy>::assemble_gradient;
 		using GenericElastic<AMIPSEnergy>::assemble_hessian;
