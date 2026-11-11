@@ -12,6 +12,8 @@ set(SOURCES
 	ElasticityUtils.cpp
 	ElasticityUtils.hpp
 	EnableWarnings.hpp
+	Experiments.cpp
+	Experiments.hpp
 	ExpressionValue.cpp
 	ExpressionValue.hpp
 	GeogramUtils.cpp

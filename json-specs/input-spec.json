@@ -20,9 +20,25 @@
             "constraints",
             "output",
             "input",
-            "tests"
+            "tests",
+            "experiments"
         ],
         "doc": "Root of the configuration file."
+    },
+    {
+        "pointer": "/experiments",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "robust_jacobian"
+        ],
+        "doc": "Experimental options, all off by default. They apply to the whole process."
+    },
+    {
+        "pointer": "/experiments/robust_jacobian",
+        "default": false,
+        "type": "bool",
+        "doc": "AMIPS takes det F from the robust (certified) evaluation the conservative inversion checks use, as the ratio of the reference determinants of the deformed and rest maps, instead of from F in floating point. Only used with a conservative inversion check (solver/advanced/check_inversion)."
     },
     {
         "pointer": "/common",

@@ -21,6 +21,7 @@
 #include <polyfem/utils/Timer.hpp>
 #include <polyfem/utils/Logger.hpp>
 #include <polyfem/utils/Jacobian.hpp>
+#include <polyfem/utils/Experiments.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
 
 #include <igl/Timer.h>
@@ -215,6 +216,7 @@ namespace polyfem::varform
 
 		this->units = units;
 		this->args = args;
+		experiments::set_from_json(args);
 
 		this->output_path = out_path;
 		output_sampler_initialized_ = false;
