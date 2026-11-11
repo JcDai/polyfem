@@ -1,5 +1,6 @@
 #include "NLProblem.hpp"
 #include <polyfem/solver/forms/ElasticForm.hpp>
+#include <polyfem/utils/Experiments.hpp>
 #include <numeric>
 
 #include <polyfem/io/OBJWriter.hpp>
@@ -224,6 +225,54 @@ namespace polyfem::solver
 	void NLProblem::init(const TVector &x)
 	{
 		FullNLProblem::init(has_identifications() ? reduced_to_full(x) : x);
+		adaptive_initialized_ = false;
+		adaptive_prev_min_det_ = std::numeric_limits<double>::infinity();
+	}
+
+	void NLProblem::update_adaptive_elastic_stiffness(const TVector &full)
+	{
+		const auto &opt = experiments::settings().adaptive_elastic_stiffness;
+		if (!opt.enabled)
+			return;
+		std::shared_ptr<ElasticForm> ef;
+		for (const auto &f : forms_)
+			if (auto e = std::dynamic_pointer_cast<ElasticForm>(f))
+				ef = e;
+		if (!ef)
+			return;
+
+		// kappa multiplies the configured material weight: kmin = 1, kmax = max_scale.
+		const double kmin = 1, kmax = std::max(1., opt.max_scale);
+		const double min_det = ef->min_quadrature_det(full);
+		if (!adaptive_initialized_)
+		{
+			// Once per solve (polysolve calls post_step with iteration 0 both
+			// before and after the first step): balance the gradients.
+			adaptive_initialized_ = true;
+			TVector gB, gE = TVector::Zero(full.size()), g;
+			ef->first_derivative(full, gB);
+			gB /= ef->weight(); // at kappa = 1
+			for (const auto &f : forms_)
+			{
+				if (f == ef || !f->enabled())
+					continue;
+				f->first_derivative(full, g);
+				gE += g;
+			}
+			const double nB = gB.squaredNorm();
+			double kappa = nB > 0 ? -gB.dot(gE) / nB : kmin;
+			kappa = std::min(kmax, std::max(kmin, kappa));
+			ef->set_weight(kappa);
+			logger().info("Adaptive elastic stiffness: initial {:g} (min det F {:g})", kappa, min_det);
+		}
+		else if (adaptive_prev_min_det_ < opt.det_threshold && min_det < opt.det_threshold && min_det < adaptive_prev_min_det_)
+		{
+			const double prev = ef->weight();
+			ef->set_weight(std::min(kmax, 2 * prev));
+			if (ef->weight() != prev)
+				logger().info("Adaptive elastic stiffness: {:g} -> {:g} (min det F {:g} -> {:g})", prev, ef->weight(), adaptive_prev_min_det_, min_det);
+		}
+		adaptive_prev_min_det_ = min_det;
 	}
 
 	double NLProblem::normalize_forms()
@@ -811,6 +860,8 @@ namespace polyfem::solver
 
 	void NLProblem::post_step(const polysolve::nonlinear::PostStepData &data)
 	{
+		update_adaptive_elastic_stiffness(reduced_to_full(data.x));
+
 		FullNLProblem::post_step(polysolve::nonlinear::PostStepData(data.iter_num, data.solver_info, reduced_to_full(data.x), reduced_to_full(data.grad)));
 
 		if (penalty_problem_ && al_phase())

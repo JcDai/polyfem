@@ -142,6 +142,11 @@ namespace polyfem::solver
 		/// most recent max_step_size() call, once the step is accepted.
 		void post_step(const polysolve::nonlinear::PostStepData &data) override;
 
+		/// Smallest det F over the live quadrature points, from the same robust
+		/// evaluation as robust AMIPS (ratio of the reference dets of the
+		/// deformed and rest maps). Used by the adaptive elastic stiffness.
+		double min_quadrature_det(const Eigen::VectorXd &x) const;
+
 	private:
 		const int n_bases_;
 		std::vector<basis::ElementBases> &bases_;

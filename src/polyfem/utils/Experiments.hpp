@@ -26,6 +26,21 @@ namespace polyfem::experiments
 		/// instead of a large constant. Value only: gradient and Hessian are
 		/// unchanged.
 		bool subtract_rest_value = false;
+
+		/// Adaptive elastic stiffness, the strategy of IPC's adaptive barrier
+		/// stiffness applied to the elastic form's weight kappa (a multiplier
+		/// on the configured material weight): at the start of each nonlinear
+		/// solve, kappa = -(g_E . g_B) / |g_B|^2 (g_B the elastic gradient at
+		/// kappa = 1, g_E the sum of the other forms' gradients), clamped to
+		/// [1, max_scale] (1 if g_B = 0); after each accepted step, kappa is
+		/// doubled (up to max_scale) if the smallest det F over the elastic
+		/// form's quadrature points is below det_threshold and decreasing.
+		struct AdaptiveElasticStiffness
+		{
+			bool enabled = false;
+			double max_scale = 100;
+			double det_threshold = 1e-9;
+		} adaptive_elastic_stiffness;
 	};
 
 	/// The process-wide settings.

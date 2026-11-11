@@ -1,4 +1,5 @@
 #pragma once
+#include <limits>
 
 #include <polyfem/solver/FullNLProblem.hpp>
 #include <polyfem/solver/forms/lagrangian/AugmentedLagrangianForm.hpp>
@@ -135,6 +136,11 @@ namespace polyfem::solver
 		TVector canonicalize(const TVector &full) const;
 		void build_dof_identifications(const std::vector<std::pair<int, int>> &pairs);
 		void discover_dof_identifications();
+		/// experiments/adaptive_elastic_stiffness: set (first call of a solve)
+		/// or update (after an accepted step) the elastic form's weight.
+		void update_adaptive_elastic_stiffness(const TVector &full);
+		bool adaptive_initialized_ = false;
+		double adaptive_prev_min_det_ = std::numeric_limits<double>::infinity();
 		void setup_constraints();
 		void update_constraint_values();
 	};

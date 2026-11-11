@@ -461,6 +461,22 @@ namespace polyfem::solver
 		}
 	}
 
+	double ElasticForm::min_quadrature_det(const Eigen::VectorXd &x) const
+	{
+		const Eigen::VectorXd zero = Eigen::VectorXd::Zero(x.size());
+		double m = std::numeric_limits<double>::infinity();
+		for (int e = 0; e < (int)bases_.size(); ++e)
+		{
+			ElementAssemblyValues vals;
+			ass_vals_cache_.compute(e, is_volume_, bases_[e], geom_bases_[e], vals);
+			const Eigen::VectorXd d = vals.eval_deformed_jacobian_determinant(x).cwiseQuotient(vals.eval_deformed_jacobian_determinant(zero));
+			for (int i = 0; i < d.size(); ++i)
+				if (std::isfinite(d(i)))
+					m = std::min(m, d(i));
+		}
+		return m;
+	}
+
 	void ElasticForm::validate_rest() const
 	{
 		if (rest_validated_ || !is_conservative(check_inversion_))

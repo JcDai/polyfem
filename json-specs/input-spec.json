@@ -32,7 +32,8 @@
         "optional": [
             "robust_jacobian",
             "softening_eps",
-            "subtract_rest_value"
+            "subtract_rest_value",
+            "adaptive_elastic_stiffness"
         ],
         "doc": "Experimental options, all off by default. They apply to the whole process."
     },
@@ -54,6 +55,37 @@
         "default": false,
         "type": "bool",
         "doc": "Subtract from the AMIPS energy its pointwise minimum (d/n)^power, its value at the rest pose, so the elastic energy is 0 at rest instead of a constant that can dominate the total in floating point. Changes the value only, not the gradient or Hessian."
+    },
+    {
+        "pointer": "/experiments/adaptive_elastic_stiffness",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "enabled",
+            "max_scale",
+            "det_threshold"
+        ],
+        "doc": "Adaptive elastic stiffness, following IPC's adaptive barrier stiffness: the elastic form's weight kappa (a multiplier on the material weight) is set at the start of each nonlinear solve by balancing the elastic gradient against the other forms' gradients, clamped to [1, max_scale], and doubled after an accepted step when the smallest det F over the elastic quadrature points is below det_threshold and decreasing."
+    },
+    {
+        "pointer": "/experiments/adaptive_elastic_stiffness/enabled",
+        "default": false,
+        "type": "bool",
+        "doc": "Enable the adaptive elastic stiffness."
+    },
+    {
+        "pointer": "/experiments/adaptive_elastic_stiffness/max_scale",
+        "default": 100,
+        "type": "float",
+        "min": 1,
+        "doc": "Largest kappa, as a multiple of the configured material weight (IPC uses 100)."
+    },
+    {
+        "pointer": "/experiments/adaptive_elastic_stiffness/det_threshold",
+        "default": 1e-9,
+        "type": "float",
+        "min": 0,
+        "doc": "kappa is doubled when the smallest det F over the elastic quadrature points is below this and decreasing (IPC's distance threshold is 1e-9 times the bounding box diagonal)."
     },
     {
         "pointer": "/common",
