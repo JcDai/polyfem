@@ -350,6 +350,10 @@ namespace polyfem::solver
 				logger().debug("Retry: refinement of element {} makes its energy non-finite at x0; reverted", invalidID);
 				quadrature_hierarchy_[invalidID] = saved;
 				update_quadrature(invalidID, dim, quadrature_hierarchy_[invalidID], quadrature_order_, bases_[invalidID], geom_bases_[invalidID], ass_vals_cache_, degenerate_ != nullptr);
+				// Do not keep the same refinement as the pending candidate:
+				// committed after the step, it would make the energy non-finite.
+				pending_refinement_.reset();
+				return step < 1 ? margin * step : step;
 			}
 		}
 
@@ -471,9 +475,18 @@ namespace polyfem::solver
 			return;
 
 		auto [id, subdivision_tree] = *pending_refinement_;
-		commit_refinement(id, subdivision_tree);
-
 		pending_refinement_.reset();
+
+		// As in the retry: next to a designed zero (degenerate corner) a
+		// refinement can put a point where det F is 0/0 at the accepted
+		// state; keep the previous quadrature then.
+		const Tree saved = quadrature_hierarchy_[id];
+		if (commit_refinement(id, subdivision_tree) && !std::isfinite(element_energy(id, data.x)))
+		{
+			logger().debug("Refinement of element {} makes its energy non-finite; reverted", id);
+			quadrature_hierarchy_[id] = saved;
+			update_quadrature(id, is_volume_ ? 3 : 2, quadrature_hierarchy_[id], quadrature_order_, bases_[id], geom_bases_[id], ass_vals_cache_, degenerate_ != nullptr);
+		}
 	}
 
 	bool ElasticForm::commit_refinement(const int id, utils::Tree &subdivision_tree, const int max_depth) const
