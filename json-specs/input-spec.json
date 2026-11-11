@@ -31,7 +31,8 @@
         "type": "object",
         "optional": [
             "robust_jacobian",
-            "softening_eps"
+            "softening_eps",
+            "subtract_rest_value"
         ],
         "doc": "Experimental options, all off by default. They apply to the whole process."
     },
@@ -47,6 +48,12 @@
         "type": "float",
         "min": 0,
         "doc": "Softening of AMIPS: tr(F^T F) is replaced by S(T) = T + eps (1 - T/eps)^3 for T < eps, which keeps the energy finite as F shrinks to zero while keeping it C2 and at or above the unsoftened value. 0 disables it. Requires robust_jacobian."
+    },
+    {
+        "pointer": "/experiments/subtract_rest_value",
+        "default": false,
+        "type": "bool",
+        "doc": "Subtract from the AMIPS energy its pointwise minimum (d/n)^power, its value at the rest pose, so the elastic energy is 0 at rest instead of a constant that can dominate the total in floating point. Changes the value only, not the gradient or Hessian."
     },
     {
         "pointer": "/common",

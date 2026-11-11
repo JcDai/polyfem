@@ -20,6 +20,12 @@ namespace polyfem::experiments
 		/// energy keeps its minimum). 0 = off. Robust path only, so it needs
 		/// robust_jacobian.
 		double softening_eps = 0;
+
+		/// AMIPS energy minus its pointwise minimum (d/n)^power (the value at
+		/// the rest pose, or any similarity), so the energy is 0 at rest
+		/// instead of a large constant. Value only: gradient and Hessian are
+		/// unchanged.
+		bool subtract_rest_value = false;
 	};
 
 	/// The process-wide settings.

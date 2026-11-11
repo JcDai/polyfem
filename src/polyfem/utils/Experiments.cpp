@@ -18,8 +18,12 @@ namespace polyfem::experiments
 			const json &e = args["experiments"];
 			s.robust_jacobian = e.value("robust_jacobian", s.robust_jacobian);
 			s.softening_eps = e.value("softening_eps", s.softening_eps);
+			s.subtract_rest_value = e.value("subtract_rest_value", s.subtract_rest_value);
 		}
 		settings() = s;
+
+		if (s.subtract_rest_value)
+			logger().info("Experiments: AMIPS rest value subtracted");
 
 		if (s.robust_jacobian)
 			logger().info("Experiments: robust det J in AMIPS");

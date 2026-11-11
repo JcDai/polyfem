@@ -206,7 +206,12 @@ namespace polyfem::assembler
 			const double Ja = std::pow(J, -a) / n;
 			const double B = T * Ja;
 			if (energy)
-				*energy += w * std::pow(B, k) * data.da(p);
+			{
+				// With subtract_rest_value, B^k - R^k with R = d / n the minimum of B,
+				// as R^k expm1(k log(B / R)): no cancellation near rest.
+				const double R = dim / n;
+				*energy += w * (experiments::settings().subtract_rest_value ? std::pow(R, k) * std::expm1(k * std::log(B / R)) : std::pow(B, k)) * data.da(p);
+			}
 			if (!gradient && !hessian)
 				continue;
 

@@ -4,6 +4,7 @@
 #include <polyfem/assembler/MatParams.hpp>
 #include <polyfem/utils/Types.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
+#include <polyfem/utils/Experiments.hpp>
 
 #include <polyfem/Common.hpp>
 
@@ -62,7 +63,11 @@ namespace polyfem::assembler
 			const double weight = weight_(p, t, el_id);
 			const T base_energy = (def_grad.transpose() * def_grad).trace() / powJ;
 			const double normalization = normalized_(p, t, el_id) != 0 ? size() : 1;
-			return T(weight) * pow(base_energy / T(normalization), power_(p, t, el_id));
+			const double k = power_(p, t, el_id);
+			if (experiments::settings().subtract_rest_value)
+				// minus the minimum (d / n)^k: the value changes, its derivatives do not
+				return T(weight) * (pow(base_energy / T(normalization), k) - T(std::pow(size() / normalization, k)));
+			return T(weight) * pow(base_energy / T(normalization), k);
 		}
 
 	private:
