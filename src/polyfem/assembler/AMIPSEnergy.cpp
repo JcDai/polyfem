@@ -172,8 +172,11 @@ namespace polyfem::assembler
 			const Eigen::MatrixXd dF_du = grad * jac_it;
 			const Eigen::MatrixXd F = local_disp.transpose() * dF_du + Eigen::MatrixXd::Identity(dim, dim);
 
-			// Physical det F: the reference det of the deformed map over that of the rest map.
-			const double J = jacs(p) / rest_jacs(p);
+			// Physical det F: the reference det of the deformed map over that of the
+			// rest map; at a limit node (a direction into a degenerate corner), the
+			// det of the limit of F, which the gradients there hold.
+			const bool limit = (long)data.vals.limit_node.size() == data.da.size() && data.vals.limit_node[p];
+			const double J = limit ? F.determinant() : jacs(p) / rest_jacs(p);
 			const RowVectorNd &pt = data.vals.val.row(p);
 			const double w = weight_(pt, data.t, data.vals.element_id);
 			const double k = power_(pt, data.t, data.vals.element_id);

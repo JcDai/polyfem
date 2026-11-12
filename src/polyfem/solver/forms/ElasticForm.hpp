@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 #include "Form.hpp"
 
 #include <polyfem/basis/ElementBases.hpp>
@@ -183,6 +185,32 @@ namespace polyfem::solver
 
 		/// Energy of element @p e alone at @p x, with its live quadrature.
 		double element_energy(const int e, const Eigen::VectorXd &x) const;
+
+		// ---- experiments/deep_leaf_depth
+		/// A directional node: quadrature point q evaluates the limit of F at the
+		/// degenerate corner along dir; mass_det is |det grad X| for its mass.
+		struct DirNode
+		{
+			int q;
+			Eigen::RowVectorXd dir;
+			double mass_det;
+		};
+		/// Per element: leaf path in quadrature_hierarchy_ -> unit direction from the corner.
+		mutable std::vector<std::map<std::vector<int>, Eigen::RowVectorXd>> deep_dirs_;
+		/// Per element: the directional nodes of its live quadrature.
+		mutable std::vector<std::vector<DirNode>> dir_nodes_;
+		/// Configuration to locate the minimum at, and to check finiteness at.
+		mutable Eigen::VectorXd deep_locate_x_, deep_guard_x_;
+		/// Distance from the corner of the samples the limit of F is extrapolated from (reference coordinates).
+		static constexpr double limit_r_ = 1e-3;
+		bool deep_commit(const int id, const utils::Tree &witness) const;
+		/// Rebuild element @p e's live quadrature from its tree (and its directional nodes).
+		void rebuild_element_quadrature(const int e) const;
+		const utils::DegenerateCorner &corner(const int e) const;
+		int corner_basis(const int e) const;
+		Eigen::MatrixXd local_disp(const int e, const Eigen::VectorXd &x) const;
+		std::vector<Eigen::MatrixXd> limit_grads(const int e, const Eigen::MatrixXd &dirs) const;
+		Eigen::VectorXd limit_det(const int e, const Eigen::MatrixXd &dirs, const Eigen::VectorXd &x) const;
 
 		Eigen::VectorXd x_prev_;
 

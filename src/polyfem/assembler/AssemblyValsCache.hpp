@@ -44,6 +44,9 @@ namespace polyfem
 
 			inline bool is_initialized() const { return !cache.empty(); }
 
+			/// Mutable access to a cached entry (limit nodes are patched in place).
+			ElementAssemblyValues &mutable_entry(const int e) { return cache[e]; }
+
 			inline bool is_mass() const { return is_mass_; }
 
 		private:

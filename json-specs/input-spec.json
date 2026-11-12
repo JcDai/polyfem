@@ -35,7 +35,8 @@
             "subtract_rest_value",
             "adaptive_elastic_stiffness",
             "check_inversion_retry",
-            "energy_trace"
+            "energy_trace",
+            "deep_leaf_depth"
         ],
         "doc": "Experimental options, all off by default. They apply to the whole process."
     },
@@ -117,6 +118,13 @@
         "default": "",
         "type": "string",
         "doc": "Directory to write the energy trace to (iterations.csv: every form's weighted energy, the gradient norms and the elastic weight after each accepted step; plot with tools/plot_energy_terms.py). Empty disables it."
+    },
+    {
+        "pointer": "/experiments/deep_leaf_depth",
+        "default": 0,
+        "type": "int",
+        "min": 0,
+        "doc": "Deep-leaf quadrature; 0 disables it (refinement adds two levels per capped step). When set, a capped step's witness is merged into the element's quadrature tree in full down to this depth, and a witness deeper than that, in a leaf touching a degenerate corner (solver/advanced/degenerate_edges), gives that leaf one directional node carrying the leaf's mass: the limit of F at the corner along the direction within the leaf that minimizes det F (grid and Newton search)."
     },
     {
         "pointer": "/common",

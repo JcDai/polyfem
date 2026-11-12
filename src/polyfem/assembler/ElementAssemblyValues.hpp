@@ -37,6 +37,12 @@ namespace polyfem
 			// det(∑∇φᵢ⋅Nᵢ) det fo the jacobian of geometric mapping (constant for P1)
 			Eigen::VectorXd det; // R^{m x 1}
 
+			/// Per quadrature point, nonzero where the point is a limit node (the
+			/// directional nodes of experiments/deep_leaf_depth at a degenerate
+			/// corner): gradients hold the limit of F along a direction into the
+			/// corner, so det F must be taken from F. Empty or of another size: none.
+			std::vector<char> limit_node;
+
 			// only poly elements have no parameterization
 			bool has_parameterization = true;
 

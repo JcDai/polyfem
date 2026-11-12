@@ -11,6 +11,8 @@
 #include <polyfem/utils/Experiments.hpp>
 
 #include <algorithm>
+#include <functional>
+#include <map>
 #include <cassert>
 #include <cmath>
 #include <memory>
@@ -145,6 +147,155 @@ namespace polyfem::solver
 
 			if (ass_vals_cache.is_initialized())
 				ass_vals_cache.update(invalidID, dim == 3, bs, gbs);
+		}
+
+		Eigen::MatrixXd ref_vertices(const int dim)
+		{
+			Eigen::MatrixXd V = Eigen::MatrixXd::Zero(dim + 1, dim);
+			for (int k = 1; k <= dim; ++k)
+				V(k, k - 1) = 1;
+			return V;
+		}
+
+		/// Vertices of child @p i of the simplex @p V split with @p scheme.
+		Eigen::MatrixXd child_vertices(const Eigen::MatrixXd &V, const int scheme, const int i)
+		{
+			const int dim = V.cols();
+			Eigen::MatrixXd B = Eigen::MatrixXd::Zero(dim + 1, dim + 1);
+			B.rightCols(dim) = child_nodes(dim, scheme, i);
+			B.col(0) = 1. - B.rightCols(dim).rowwise().sum().array();
+			return B * V;
+		}
+
+		/// Euclidean projection onto the reference simplex {p >= 0, sum p <= 1}.
+		Eigen::RowVectorXd project_simplex(const Eigen::RowVectorXd &p)
+		{
+			const int n = p.size();
+			Eigen::VectorXd lam(n + 1);
+			lam(0) = 1 - p.sum();
+			lam.tail(n) = p.transpose();
+			std::vector<double> u(lam.data(), lam.data() + n + 1);
+			std::sort(u.begin(), u.end(), std::greater<double>());
+			double css = 0, theta = 0;
+			for (int j = 0; j <= n; ++j)
+			{
+				css += u[j];
+				const double t = (css - 1) / (j + 1);
+				if (u[j] - t > 0)
+					theta = t;
+			}
+			lam = (lam.array() - theta).max(0.0);
+			return lam.tail(n).transpose();
+		}
+
+		/// Minimize f over the reference simplex from p: finite-difference Newton
+		/// with backtracking (step h), then a compass search.
+		std::pair<Eigen::RowVectorXd, double> simplex_minimize(
+			const std::function<Eigen::VectorXd(const Eigen::MatrixXd &)> &f,
+			Eigen::RowVectorXd p, const double h, const int newton_iters, int *n_newton = nullptr)
+		{
+			const int n = p.size();
+			p = project_simplex(p);
+			auto f1 = [&](const Eigen::RowVectorXd &q) { return f(Eigen::MatrixXd(q))(0); };
+			double fp = f1(p);
+			int it = 0;
+			for (; it < newton_iters; ++it)
+			{
+				const int npts = 1 + 2 * n + 2 * n * (n - 1);
+				Eigen::MatrixXd S(npts, n);
+				int r = 0;
+				S.row(r++) = p;
+				for (int i = 0; i < n; ++i)
+				{
+					Eigen::RowVectorXd e = Eigen::RowVectorXd::Zero(n);
+					e(i) = h;
+					S.row(r++) = p + e;
+					S.row(r++) = p - e;
+				}
+				for (int i = 0; i < n; ++i)
+					for (int j = i + 1; j < n; ++j)
+					{
+						Eigen::RowVectorXd ei = Eigen::RowVectorXd::Zero(n), ej = Eigen::RowVectorXd::Zero(n);
+						ei(i) = h;
+						ej(j) = h;
+						S.row(r++) = p + ei + ej;
+						S.row(r++) = p + ei - ej;
+						S.row(r++) = p - ei + ej;
+						S.row(r++) = p - ei - ej;
+					}
+				const Eigen::VectorXd fv = f(S);
+				if (!fv.allFinite())
+					break;
+				Eigen::VectorXd g(n);
+				Eigen::MatrixXd H(n, n);
+				for (int i = 0; i < n; ++i)
+				{
+					g(i) = (fv(1 + 2 * i) - fv(2 + 2 * i)) / (2 * h);
+					H(i, i) = (fv(1 + 2 * i) - 2 * fv(0) + fv(2 + 2 * i)) / (h * h);
+				}
+				r = 1 + 2 * n;
+				for (int i = 0; i < n; ++i)
+					for (int j = i + 1; j < n; ++j)
+					{
+						H(i, j) = H(j, i) = (fv(r) - fv(r + 1) - fv(r + 2) + fv(r + 3)) / (4 * h * h);
+						r += 4;
+					}
+				Eigen::VectorXd d;
+				Eigen::LLT<Eigen::MatrixXd> llt(H);
+				if (llt.info() == Eigen::Success)
+					d = llt.solve(-g);
+				if (d.size() == 0 || !d.allFinite() || d.dot(g) >= 0)
+					d = -g;
+				if (d.norm() > 0.25)
+					d *= 0.25 / d.norm();
+				bool moved = false;
+				for (double a = 1; a > 1e-12; a /= 2)
+				{
+					const Eigen::RowVectorXd q = project_simplex(p + a * d.transpose());
+					const double fq = f1(q);
+					if (q.allFinite() && fq < fp)
+					{
+						moved = (q - p).norm() > 1e-14;
+						p = q;
+						fp = fq;
+						break;
+					}
+				}
+				if (!moved)
+					break;
+			}
+			if (n_newton)
+				*n_newton = it;
+
+			std::vector<Eigen::RowVectorXd> dirs;
+			for (int k = 0; k < n; ++k)
+			{
+				Eigen::RowVectorXd d = Eigen::RowVectorXd::Zero(n);
+				d(k) = 1;
+				dirs.push_back(d);
+				dirs.push_back(-d);
+			}
+			dirs.push_back(Eigen::RowVectorXd::Constant(n, 1. / std::sqrt(n)));
+			dirs.push_back(Eigen::RowVectorXd::Constant(n, -1. / std::sqrt(n)));
+			for (double step = 1e-2; step > 1e-10;)
+			{
+				Eigen::MatrixXd C(dirs.size(), n);
+				for (size_t i = 0; i < dirs.size(); ++i)
+					C.row(i) = project_simplex(p + step * dirs[i]);
+				const Eigen::VectorXd fc = f(C);
+				int best = -1;
+				for (int i = 0; i < fc.size(); ++i)
+					if (std::isfinite(fc(i)) && fc(i) < fp && (best < 0 || fc(i) < fc(best)))
+						best = i;
+				if (best >= 0)
+				{
+					p = C.row(best);
+					fp = fc(best);
+				}
+				else
+					step /= 2;
+			}
+			return {p, fp};
 		}
 	} // namespace
 
@@ -281,6 +432,8 @@ namespace polyfem::solver
 
 		for (auto &t : quadrature_hierarchy_)
 			t = Tree();
+		for (auto &d : deep_dirs_)
+			d.clear();
 		pending_refinement_.reset();
 		recompute_ = false;
 		retries_ = 0;
@@ -337,6 +490,8 @@ namespace polyfem::solver
 			// Refining next to a designed zero (degenerate corner) can put a
 			// point where det F is 0/0 at x0; undo such a refinement.
 			const Tree saved = quadrature_hierarchy_[invalidID];
+			deep_locate_x_ = x0 + step * (x1 - x0); // where the check found det F about to vanish
+			deep_guard_x_ = x0;
 			if (commit_refinement(invalidID, subdivision_tree))
 			{
 				if (std::isfinite(element_energy(invalidID, x0)))
@@ -349,7 +504,7 @@ namespace polyfem::solver
 				}
 				logger().debug("Retry: refinement of element {} makes its energy non-finite at x0; reverted", invalidID);
 				quadrature_hierarchy_[invalidID] = saved;
-				update_quadrature(invalidID, dim, quadrature_hierarchy_[invalidID], quadrature_order_, bases_[invalidID], geom_bases_[invalidID], ass_vals_cache_, degenerate_ != nullptr);
+				rebuild_element_quadrature(invalidID);
 				// Do not keep the same refinement as the pending candidate:
 				// committed after the step, it would make the energy non-finite.
 				pending_refinement_.reset();
@@ -364,6 +519,7 @@ namespace polyfem::solver
 			// the next iteration's energy/gradient/Hessian actually sees
 			// this near-degenerate point instead of repeating the same
 			// failure against stale quadrature.
+			deep_locate_x_ = deep_guard_x_ = x0;
 			commit_refinement(invalidID, subdivision_tree);
 			pending_refinement_.reset();
 		}
@@ -463,7 +619,10 @@ namespace polyfem::solver
 		// and that vertex is only a quadrature point (corner quadrature) once
 		// that level of refinement exists.
 		if (id >= 0)
+		{
+			deep_locate_x_ = deep_guard_x_ = x0;
 			commit_refinement(id, witness, std::numeric_limits<int>::max());
+		}
 
 		return false;
 	}
@@ -481,18 +640,324 @@ namespace polyfem::solver
 		// refinement can put a point where det F is 0/0 at the accepted
 		// state; keep the previous quadrature then.
 		const Tree saved = quadrature_hierarchy_[id];
+		deep_locate_x_ = deep_guard_x_ = data.x;
 		if (commit_refinement(id, subdivision_tree) && !std::isfinite(element_energy(id, data.x)))
 		{
 			logger().debug("Refinement of element {} makes its energy non-finite; reverted", id);
 			quadrature_hierarchy_[id] = saved;
-			update_quadrature(id, is_volume_ ? 3 : 2, quadrature_hierarchy_[id], quadrature_order_, bases_[id], geom_bases_[id], ass_vals_cache_, degenerate_ != nullptr);
+			rebuild_element_quadrature(id);
 		}
+	}
+
+	const utils::DegenerateCorner &ElasticForm::corner(const int e) const
+	{
+		static const utils::DegenerateCorner none;
+		return degenerate_ ? degenerate_->corners[e] : none;
+	}
+
+	int ElasticForm::corner_basis(const int e) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		ElementAssemblyValues vals;
+		vals.compute(e, is_volume_, Eigen::MatrixXd(ref_vertices(dim).row(corner(e).vertex)), bases_[e], geom_bases_[e]);
+		for (int i = 0; i < (int)vals.basis_values.size(); ++i)
+			if (std::abs(vals.basis_values[i].val(0) - 1) < 1e-12)
+				return i;
+		log_and_throw_error("No basis is 1 at the degenerate corner of element {}", e);
+		return -1;
+	}
+
+	Eigen::MatrixXd ElasticForm::local_disp(const int e, const Eigen::VectorXd &x) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		const auto &bs = bases_[e];
+		Eigen::MatrixXd u = Eigen::MatrixXd::Zero(bs.bases.size(), dim);
+		for (size_t i = 0; i < bs.bases.size(); ++i)
+			for (const auto &g : bs.bases[i].global())
+				u.row(i) += g.val * x.segment(g.index * dim, dim).transpose();
+		return u;
+	}
+
+	std::vector<Eigen::MatrixXd> ElasticForm::limit_grads(const int e, const Eigen::MatrixXd &dirs) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		const utils::DegenerateCorner &c = corner(e);
+		const Eigen::RowVectorXd v = ref_vertices(dim).row(c.vertex);
+		const int nd = dirs.rows();
+		Eigen::MatrixXd pts(3 * nd, dim);
+		for (int k = 0; k < nd; ++k)
+		{
+			pts.row(3 * k) = v + limit_r_ * dirs.row(k);
+			pts.row(3 * k + 1) = v + 2 * limit_r_ * dirs.row(k);
+			pts.row(3 * k + 2) = v + 4 * limit_r_ * dirs.row(k);
+		}
+		ElementAssemblyValues vals;
+		vals.compute(e, is_volume_, pts, bases_[e], geom_bases_[e]);
+		const int n = vals.basis_values.size();
+		const int vb = corner_basis(e);
+		std::vector<Eigen::MatrixXd> out(nd, Eigen::MatrixXd(n, dim));
+		for (int k = 0; k < nd; ++k)
+		{
+			auto &G = out[k];
+			for (int i = 0; i < n; ++i)
+			{
+				const auto &g = vals.basis_values[i].grad_t_m;
+				// Richardson: F(r) = F0 + c1 r + c2 r^2 + O(r^3)
+				G.row(i) = (8 * g.row(3 * k) - 6 * g.row(3 * k + 1) + g.row(3 * k + 2)) / 3.;
+			}
+			// The collapsed control points merge into the corner: only their sum
+			// has a limit (the displacement keeps the collapse).
+			for (const int j : c.near_nodes)
+			{
+				G.row(vb) += G.row(j);
+				G.row(j).setZero();
+			}
+		}
+		return out;
+	}
+
+	Eigen::VectorXd ElasticForm::limit_det(const int e, const Eigen::MatrixXd &dirs, const Eigen::VectorXd &x) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		const std::vector<Eigen::MatrixXd> G = limit_grads(e, dirs);
+		const Eigen::MatrixXd u = local_disp(e, x);
+		Eigen::VectorXd out(dirs.rows());
+		for (int k = 0; k < dirs.rows(); ++k)
+		{
+			const Eigen::MatrixXd F = Eigen::MatrixXd::Identity(dim, dim) + u.transpose() * G[k];
+			out(k) = F.allFinite() ? F.determinant() : std::nan("");
+		}
+		return out;
+	}
+
+	bool ElasticForm::deep_commit(const int id, const utils::Tree &witness) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		const int D = experiments::settings().deep_leaf_depth;
+		if (deep_dirs_.size() != bases_.size())
+			deep_dirs_.resize(bases_.size());
+		const Tree saved_tree = quadrature_hierarchy_[id];
+		const auto saved_dirs = deep_dirs_[id];
+
+		// The witness, cut at absolute depth D, merged in full.
+		std::function<void(const Tree &, Tree &, int)> trunc = [&](const Tree &w, Tree &o, const int d) {
+			if (!w.has_children() || d >= D)
+				return;
+			o.add_children(w.n_children(), w.scheme());
+			for (int i = 0; i < w.n_children(); ++i)
+				trunc(w.child(i), o.child(i), d + 1);
+		};
+		Tree cut;
+		trunc(witness, cut, 0);
+		bool changed = quadrature_hierarchy_[id].merge(cut, std::numeric_limits<int>::max());
+
+		// A deeper witness in a leaf touching the degenerate corner: one
+		// directional node for the depth-D leaf on its deepest path.
+		const utils::DegenerateCorner &c = corner(id);
+		const Eigen::VectorXd &xl = deep_locate_x_;
+		if (c.vertex >= 0 && witness.depth() > D && xl.size() == n_bases_ * dim)
+		{
+			Eigen::MatrixXd V = ref_vertices(dim);
+			const Tree *h = &quadrature_hierarchy_[id], *w = &witness;
+			std::vector<int> path;
+			while (h->has_children() && w->has_children() && (int)path.size() < D)
+			{
+				if (h->scheme() != w->scheme() || h->n_children() != w->n_children())
+					break;
+				int best = 0;
+				for (int i = 1; i < w->n_children(); ++i)
+					if (w->child(i).depth() > w->child(best).depth())
+						best = i;
+				V = child_vertices(V, h->scheme(), best);
+				path.push_back(best);
+				h = &h->child(best);
+				w = &w->child(best);
+			}
+			const Eigen::RowVectorXd v = ref_vertices(dim).row(c.vertex);
+			int vk = -1;
+			for (int k = 0; k <= dim; ++k)
+				if ((V.row(k) - v).norm() < 1e-14)
+					vk = k;
+			if (!h->has_children() && (int)path.size() == D && vk >= 0)
+			{
+				// Directions from the corner through the leaf's opposite face.
+				std::vector<int> others;
+				for (int k = 0; k <= dim; ++k)
+					if (k != vk)
+						others.push_back(k);
+				auto dir_of = [&](const Eigen::RowVectorXd &s) {
+					Eigen::RowVectorXd d = V.row(others[0]) - v;
+					for (int j = 1; j < (int)others.size(); ++j)
+						d += s(j - 1) * (V.row(others[j]) - V.row(others[0]));
+					return Eigen::RowVectorXd(d / d.norm());
+				};
+				auto f_dir = [&](const Eigen::MatrixXd &S) {
+					Eigen::MatrixXd Dm(S.rows(), dim);
+					for (int i = 0; i < S.rows(); ++i)
+						Dm.row(i) = dir_of(S.row(i));
+					Eigen::VectorXd out = limit_det(id, Dm, xl);
+					for (int i = 0; i < out.size(); ++i)
+						if (!std::isfinite(out(i)))
+							out(i) = std::numeric_limits<double>::infinity();
+					return out;
+				};
+				const int N = 6, ns = dim - 1;
+				std::vector<Eigen::RowVectorXd> grid;
+				for (int i = 0; i <= N; ++i)
+					for (int j = 0; (ns == 1 ? j == 0 : i + j <= N); ++j)
+					{
+						Eigen::RowVectorXd sv(ns);
+						sv(0) = double(i) / N;
+						if (ns == 2)
+							sv(1) = double(j) / N;
+						grid.push_back(sv);
+					}
+				Eigen::MatrixXd S(grid.size(), ns);
+				for (size_t i = 0; i < grid.size(); ++i)
+					S.row(i) = grid[i];
+				const Eigen::VectorXd fs = f_dir(S);
+				Eigen::Index ib = 0;
+				for (Eigen::Index i = 0; i < fs.size(); ++i)
+					if (fs(i) < fs(ib))
+						ib = i;
+				int its = 0;
+				const auto [s_star, a] = simplex_minimize(f_dir, S.row(ib), 1e-4, 30, &its);
+				if (std::isfinite(a))
+				{
+					const Eigen::RowVectorXd d = dir_of(s_star);
+					auto it = deep_dirs_[id].find(path);
+					if (it == deep_dirs_[id].end() || (it->second - d).norm() > 1e-12)
+					{
+						deep_dirs_[id][path] = d;
+						changed = true;
+					}
+					logger().debug("Deep leaf: elem {} depth {} direction [{:.6g}, {:.6g}, {:.6g}] limit det F {:.4e} (newton its {}), {} directional nodes in the element",
+								   id, D, d(0), d(1), dim > 2 ? d(2) : 0., a, its, deep_dirs_[id].size());
+				}
+			}
+		}
+		if (!changed)
+			return false;
+		rebuild_element_quadrature(id);
+		if (deep_guard_x_.size() == n_bases_ * dim && !std::isfinite(element_energy(id, deep_guard_x_)))
+		{
+			logger().debug("Deep leaf: update of element {} makes its energy non-finite; reverted", id);
+			quadrature_hierarchy_[id] = saved_tree;
+			deep_dirs_[id] = saved_dirs;
+			rebuild_element_quadrature(id);
+			return false;
+		}
+		return true;
+	}
+
+	void ElasticForm::rebuild_element_quadrature(const int e) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		if (dir_nodes_.size() != bases_.size())
+			dir_nodes_.resize(bases_.size());
+		const bool has_dirs = e < (int)deep_dirs_.size() && !deep_dirs_[e].empty();
+		if (!has_dirs)
+		{
+			update_quadrature(e, dim, quadrature_hierarchy_[e], quadrature_order_, bases_[e], geom_bases_[e], ass_vals_cache_, degenerate_ != nullptr);
+			if (!dir_nodes_[e].empty() && ass_vals_cache_.is_initialized())
+				ass_vals_cache_.mutable_entry(e).limit_node.clear();
+			dir_nodes_[e].clear();
+			return;
+		}
+		const auto &dirs = deep_dirs_[e];
+		const Quadrature rule = degenerate_ ? degenerate_quadrature(dim) : corner_quadrature(dim, quadrature_order_);
+		const double rule_sum = rule.weights.sum();
+		const Eigen::RowVectorXd v = ref_vertices(dim).row(corner(e).vertex);
+
+		std::vector<Eigen::RowVectorXd> P, cents;
+		std::vector<double> W;
+		std::vector<DirNode> dn;
+		std::vector<int> path;
+		std::function<void(const Tree &, const Eigen::MatrixXd &)> rec = [&](const Tree &t, const Eigen::MatrixXd &V) {
+			if (t.has_children())
+			{
+				for (int i = 0; i < t.n_children(); ++i)
+				{
+					path.push_back(i);
+					rec(t.child(i), child_vertices(V, t.scheme(), i));
+					path.pop_back();
+				}
+				return;
+			}
+			Eigen::MatrixXd M(dim, dim);
+			for (int j = 0; j < dim; ++j)
+				M.col(j) = (V.row(j + 1) - V.row(0)).transpose();
+			const double scale = std::abs(M.determinant()); // leaf volume / reference volume
+			const auto it = dirs.find(path);
+			if (it == dirs.end())
+			{
+				for (int q = 0; q < rule.size(); ++q)
+				{
+					const Eigen::RowVectorXd mu = rule.points.row(q);
+					Eigen::RowVectorXd x = (1. - mu.sum()) * V.row(0);
+					for (int j = 0; j < dim; ++j)
+						x += mu(j) * V.row(j + 1);
+					P.push_back(x);
+					W.push_back(rule.weights(q) * scale);
+				}
+				return;
+			}
+			dn.push_back({int(P.size()), it->second, 0.});
+			cents.push_back(V.colwise().mean());
+			P.push_back(v + limit_r_ * it->second);
+			W.push_back(rule_sum * scale);
+		};
+		rec(quadrature_hierarchy_[e], ref_vertices(dim));
+
+		Quadrature quad;
+		quad.points.resize(P.size(), dim);
+		quad.weights.resize(P.size());
+		for (size_t i = 0; i < P.size(); ++i)
+		{
+			quad.points.row(i) = P[i];
+			quad.weights(i) = W[i];
+		}
+		bases_[e].set_quadrature([quad](Quadrature &q) { q = quad; });
+		if (!ass_vals_cache_.is_initialized())
+			log_and_throw_error("Deep-leaf quadrature needs an initialized assembly cache");
+		ass_vals_cache_.update(e, is_volume_, bases_[e], geom_bases_[e]);
+
+		// Mass of a directional node: |det grad X| at its leaf's centroid (the node itself sits at the corner).
+		Eigen::MatrixXd C(cents.size(), dim);
+		for (size_t k = 0; k < cents.size(); ++k)
+			C.row(k) = cents[k];
+		ElementAssemblyValues gv;
+		gv.compute(e, is_volume_, C, bases_[e], geom_bases_[e]);
+		for (size_t k = 0; k < dn.size(); ++k)
+			dn[k].mass_det = std::abs(gv.det(k));
+
+		Eigen::MatrixXd Dm(dn.size(), dim);
+		for (size_t k = 0; k < dn.size(); ++k)
+			Dm.row(k) = dn[k].dir;
+		const std::vector<Eigen::MatrixXd> G = limit_grads(e, Dm);
+		auto &lv = ass_vals_cache_.mutable_entry(e);
+		lv.limit_node.assign(quad.points.rows(), 0);
+		for (size_t k = 0; k < dn.size(); ++k)
+		{
+			const int qi = dn[k].q;
+			lv.limit_node[qi] = 1;
+			for (size_t i = 0; i < lv.basis_values.size(); ++i)
+			{
+				lv.basis_values[i].grad.row(qi) = G[k].row(i);
+				lv.basis_values[i].grad_t_m.row(qi) = G[k].row(i);
+			}
+			lv.jac_it[qi] = Eigen::MatrixXd::Identity(dim, dim);
+			lv.det(qi) = dn[k].mass_det;
+		}
+		dir_nodes_[e] = dn;
 	}
 
 	bool ElasticForm::commit_refinement(const int id, utils::Tree &subdivision_tree, const int max_depth) const
 	{
 		if (!refines_quadrature_)
 			return false;
+		if (experiments::settings().deep_leaf_depth > 0)
+			return deep_commit(id, subdivision_tree);
 
 		const int dim = is_volume_ ? 3 : 2;
 
@@ -534,7 +999,17 @@ namespace polyfem::solver
 		{
 			ElementAssemblyValues vals;
 			ass_vals_cache_.compute(e, is_volume_, bases_[e], geom_bases_[e], vals);
-			const Eigen::VectorXd d = vals.eval_deformed_jacobian_determinant(x).cwiseQuotient(vals.eval_deformed_jacobian_determinant(zero));
+			Eigen::VectorXd d = vals.eval_deformed_jacobian_determinant(x).cwiseQuotient(vals.eval_deformed_jacobian_determinant(zero));
+			if (e < (int)dir_nodes_.size() && !dir_nodes_[e].empty())
+			{
+				const auto &dn = dir_nodes_[e];
+				Eigen::MatrixXd Dm(dn.size(), is_volume_ ? 3 : 2);
+				for (size_t k = 0; k < dn.size(); ++k)
+					Dm.row(k) = dn[k].dir;
+				const Eigen::VectorXd dd = limit_det(e, Dm, x);
+				for (size_t k = 0; k < dn.size(); ++k)
+					d(dn[k].q) = dd(k);
+			}
 			for (int i = 0; i < d.size(); ++i)
 				if (std::isfinite(d(i)))
 					m = std::min(m, d(i));

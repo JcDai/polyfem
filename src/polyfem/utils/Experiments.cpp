@@ -35,6 +35,7 @@ namespace polyfem::experiments
 				t.max_retries = r.value("max_retries", t.max_retries);
 			}
 			s.energy_trace = e.value("energy_trace", s.energy_trace);
+			s.deep_leaf_depth = e.value("deep_leaf_depth", s.deep_leaf_depth);
 		}
 		settings() = s;
 
@@ -43,6 +44,8 @@ namespace polyfem::experiments
 		if (s.adaptive_elastic_stiffness.enabled)
 			logger().info("Experiments: adaptive elastic stiffness, kappa in [1, {}], doubling below det F {}",
 						  s.adaptive_elastic_stiffness.max_scale, s.adaptive_elastic_stiffness.det_threshold);
+		if (s.deep_leaf_depth > 0)
+			logger().info("Experiments: deep-leaf quadrature, refinement to depth {} then directional nodes at degenerate corners", s.deep_leaf_depth);
 		if (s.check_inversion_retry.enabled)
 			logger().info("Experiments: recompute the direction when the inversion check cuts a step (at most {} times per step)",
 						  s.check_inversion_retry.max_retries);
