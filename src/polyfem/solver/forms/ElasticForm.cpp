@@ -763,21 +763,34 @@ namespace polyfem::solver
 		const Tree saved_tree = quadrature_hierarchy_[id];
 		const auto saved_dirs = deep_dirs_[id];
 
-		// The witness, cut at absolute depth D, merged in full.
-		std::function<void(const Tree &, Tree &, int)> trunc = [&](const Tree &w, Tree &o, const int d) {
-			if (!w.has_children() || d >= D)
+		// The witness merged in full, cut at absolute depth D only in leaves
+		// touching the degenerate corner: that is where det F vanishes by
+		// design and refinement would never end. Elsewhere the violation has a
+		// finite depth, and cutting there would leave it unsampled, so the same
+		// step would be rejected again (static check).
+		const utils::DegenerateCorner &c = corner(id);
+		const Eigen::RowVectorXd cv = c.vertex >= 0 ? Eigen::RowVectorXd(ref_vertices(dim).row(c.vertex)) : Eigen::RowVectorXd();
+		auto touches_corner = [&](const Eigen::MatrixXd &V) {
+			if (c.vertex < 0)
+				return false;
+			for (int k = 0; k <= dim; ++k)
+				if ((V.row(k) - cv).norm() < 1e-14)
+					return true;
+			return false;
+		};
+		std::function<void(const Tree &, Tree &, const Eigen::MatrixXd &, int)> trunc = [&](const Tree &w, Tree &o, const Eigen::MatrixXd &V, const int d) {
+			if (!w.has_children() || (d >= D && touches_corner(V)))
 				return;
 			o.add_children(w.n_children(), w.scheme());
 			for (int i = 0; i < w.n_children(); ++i)
-				trunc(w.child(i), o.child(i), d + 1);
+				trunc(w.child(i), o.child(i), child_vertices(V, w.scheme(), i), d + 1);
 		};
 		Tree cut;
-		trunc(witness, cut, 0);
+		trunc(witness, cut, ref_vertices(dim), 0);
 		bool changed = quadrature_hierarchy_[id].merge(cut, std::numeric_limits<int>::max());
 
 		// A deeper witness in a leaf touching the degenerate corner: one
 		// directional node for the depth-D leaf on its deepest path.
-		const utils::DegenerateCorner &c = corner(id);
 		const Eigen::VectorXd &xl = deep_locate_x_;
 		if (c.vertex >= 0 && witness.depth() > D && xl.size() == n_bases_ * dim)
 		{
