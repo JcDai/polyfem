@@ -621,6 +621,14 @@ namespace polyfem::solver
 		if (id < 0)
 			return false;
 
+		// The check gave up (no subdivision path) at a degenerate corner: the
+		// sign it could not settle is that of the corner's limit of det F.
+		// Sample it: a path to the corner leaf whose wedge holds the direction
+		// of smallest limit det F at x1, so the energy gets that directional
+		// node (deep_commit()).
+		if (witness.depth() == 0 && corner(id).vertex >= 0)
+			witness = corner_witness(id, x1);
+
 		// The witness certifies the violation at x1: directional nodes are
 		// placed for x1, and the refinement must keep the energy finite at
 		// x0, where the solver stays.
@@ -769,6 +777,114 @@ namespace polyfem::solver
 		return out;
 	}
 
+	Eigen::RowVectorXd ElasticForm::min_limit_direction(const int e, const Eigen::MatrixXd &V, const int vk, const Eigen::VectorXd &x, double &value, int &its) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		const Eigen::RowVectorXd v = V.row(vk);
+		// Directions from the corner through the simplex's opposite face.
+		std::vector<int> others;
+		for (int k = 0; k <= dim; ++k)
+			if (k != vk)
+				others.push_back(k);
+		auto dir_of = [&](const Eigen::RowVectorXd &s) {
+			Eigen::RowVectorXd d = V.row(others[0]) - v;
+			for (int j = 1; j < (int)others.size(); ++j)
+				d += s(j - 1) * (V.row(others[j]) - V.row(others[0]));
+			return Eigen::RowVectorXd(d / d.norm());
+		};
+		auto f_dir = [&](const Eigen::MatrixXd &S) {
+			Eigen::MatrixXd Dm(S.rows(), dim);
+			for (int i = 0; i < S.rows(); ++i)
+				Dm.row(i) = dir_of(S.row(i));
+			Eigen::VectorXd out = limit_det(e, Dm, x);
+			for (int i = 0; i < out.size(); ++i)
+				if (!std::isfinite(out(i)))
+					out(i) = std::numeric_limits<double>::infinity();
+			return out;
+		};
+		const int N = 6, ns = dim - 1;
+		std::vector<Eigen::RowVectorXd> grid;
+		for (int i = 0; i <= N; ++i)
+			for (int j = 0; (ns == 1 ? j == 0 : i + j <= N); ++j)
+			{
+				Eigen::RowVectorXd sv(ns);
+				sv(0) = double(i) / N;
+				if (ns == 2)
+					sv(1) = double(j) / N;
+				grid.push_back(sv);
+			}
+		Eigen::MatrixXd S(grid.size(), ns);
+		for (size_t i = 0; i < grid.size(); ++i)
+			S.row(i) = grid[i];
+		const Eigen::VectorXd fs = f_dir(S);
+		Eigen::Index ib = 0;
+		for (Eigen::Index i = 0; i < fs.size(); ++i)
+			if (fs(i) < fs(ib))
+				ib = i;
+		const auto [s_star, a] = simplex_minimize(f_dir, S.row(ib), 1e-4, 30, &its);
+		value = a;
+		return dir_of(s_star);
+	}
+
+	Tree ElasticForm::corner_witness(const int e, const Eigen::VectorXd &x) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		const int D = experiments::settings().deep_leaf_depth;
+		const utils::DegenerateCorner &c = corner(e);
+		Tree witness;
+		if (D <= 0 || c.vertex < 0)
+			return witness;
+
+		double a;
+		int its = 0;
+		Eigen::MatrixXd V = ref_vertices(dim);
+		const Eigen::RowVectorXd v = V.row(c.vertex);
+		const Eigen::RowVectorXd d = min_limit_direction(e, V, c.vertex, x, a, its);
+		logger().debug("Corner witness: elem {} smallest limit det F {:.4e} along [{:.6g}, {:.6g}, {:.6g}]", e, a, d(0), d(1), dim > 2 ? d(2) : 0.);
+		if (!std::isfinite(a))
+			return witness;
+
+		// Depth D + 1 through the corner leaves whose wedge holds d, with the
+		// quadrature tree's schemes where it is refined (uniform below).
+		const Tree *h = &quadrature_hierarchy_[e];
+		Tree *w = &witness;
+		for (int level = 0; level <= D; ++level)
+		{
+			const int scheme = h && h->has_children() ? h->scheme() : subdivision::Uniform;
+			const int n = utils::n_children(dim, scheme);
+			int best = -1;
+			double best_score = -std::numeric_limits<double>::infinity();
+			for (int i = 0; i < n; ++i)
+			{
+				const Eigen::MatrixXd C = child_vertices(V, scheme, i);
+				int ck = -1;
+				for (int k = 0; k <= dim; ++k)
+					if ((C.row(k) - v).norm() < 1e-14)
+						ck = k;
+				if (ck < 0)
+					continue;
+				// d in the child's wedge: d = sum_k a_k (C_k - v), all a_k >= 0.
+				Eigen::MatrixXd M(dim, dim);
+				for (int k = 0, j = 0; k <= dim; ++k)
+					if (k != ck)
+						M.col(j++) = (C.row(k) - v).transpose();
+				const double score = M.fullPivLu().solve(d.transpose()).minCoeff();
+				if (score > best_score)
+				{
+					best_score = score;
+					best = i;
+				}
+			}
+			if (best < 0)
+				return Tree();
+			w->add_children(n, scheme);
+			w = &w->child(best);
+			V = child_vertices(V, scheme, best);
+			h = h && h->has_children() ? &h->child(best) : nullptr;
+		}
+		return witness;
+	}
+
 	bool ElasticForm::deep_commit(const int id, const utils::Tree &witness) const
 	{
 		const int dim = is_volume_ ? 3 : 2;
@@ -832,51 +948,11 @@ namespace polyfem::solver
 					vk = k;
 			if (!h->has_children() && (int)path.size() == D && vk >= 0)
 			{
-				// Directions from the corner through the leaf's opposite face.
-				std::vector<int> others;
-				for (int k = 0; k <= dim; ++k)
-					if (k != vk)
-						others.push_back(k);
-				auto dir_of = [&](const Eigen::RowVectorXd &s) {
-					Eigen::RowVectorXd d = V.row(others[0]) - v;
-					for (int j = 1; j < (int)others.size(); ++j)
-						d += s(j - 1) * (V.row(others[j]) - V.row(others[0]));
-					return Eigen::RowVectorXd(d / d.norm());
-				};
-				auto f_dir = [&](const Eigen::MatrixXd &S) {
-					Eigen::MatrixXd Dm(S.rows(), dim);
-					for (int i = 0; i < S.rows(); ++i)
-						Dm.row(i) = dir_of(S.row(i));
-					Eigen::VectorXd out = limit_det(id, Dm, xl);
-					for (int i = 0; i < out.size(); ++i)
-						if (!std::isfinite(out(i)))
-							out(i) = std::numeric_limits<double>::infinity();
-					return out;
-				};
-				const int N = 6, ns = dim - 1;
-				std::vector<Eigen::RowVectorXd> grid;
-				for (int i = 0; i <= N; ++i)
-					for (int j = 0; (ns == 1 ? j == 0 : i + j <= N); ++j)
-					{
-						Eigen::RowVectorXd sv(ns);
-						sv(0) = double(i) / N;
-						if (ns == 2)
-							sv(1) = double(j) / N;
-						grid.push_back(sv);
-					}
-				Eigen::MatrixXd S(grid.size(), ns);
-				for (size_t i = 0; i < grid.size(); ++i)
-					S.row(i) = grid[i];
-				const Eigen::VectorXd fs = f_dir(S);
-				Eigen::Index ib = 0;
-				for (Eigen::Index i = 0; i < fs.size(); ++i)
-					if (fs(i) < fs(ib))
-						ib = i;
 				int its = 0;
-				const auto [s_star, a] = simplex_minimize(f_dir, S.row(ib), 1e-4, 30, &its);
+				double a;
+				const Eigen::RowVectorXd d = min_limit_direction(id, V, vk, xl, a, its);
 				if (std::isfinite(a))
 				{
-					const Eigen::RowVectorXd d = dir_of(s_star);
 					auto it = deep_dirs_[id].find(path);
 					if (it == deep_dirs_[id].end() || (it->second - d).norm() > 1e-12)
 					{
