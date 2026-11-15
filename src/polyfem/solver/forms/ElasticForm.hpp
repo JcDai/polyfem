@@ -212,18 +212,6 @@ namespace polyfem::solver
 		Eigen::MatrixXd local_disp(const int e, const Eigen::VectorXd &x) const;
 		std::vector<Eigen::MatrixXd> limit_grads(const int e, const Eigen::MatrixXd &dirs) const;
 		Eigen::VectorXd limit_det(const int e, const Eigen::MatrixXd &dirs, const Eigen::VectorXd &x) const;
-		/// Unit direction from vertex @p vk of the reference sub-simplex @p V
-		/// (the degenerate corner of element @p e) into it that minimizes the
-		/// limit of det F at the corner in configuration @p x; the minimum in
-		/// @p value (grid, then finite-difference Newton: @p its iterations).
-		Eigen::RowVectorXd min_limit_direction(const int e, const Eigen::MatrixXd &V, const int vk, const Eigen::VectorXd &x, double &value, int &its) const;
-		/// For a static rejection without a subdivision path (the check gave
-		/// up) at a degenerate corner element: a witness of depth
-		/// deep_leaf_depth + 1 through the corner leaves whose wedge holds the
-		/// direction of smallest limit det F at @p x, following the quadrature
-		/// tree's schemes where it is refined. Empty without a corner or with
-		/// deep leaves off.
-		utils::Tree corner_witness(const int e, const Eigen::VectorXd &x) const;
 
 		Eigen::VectorXd x_prev_;
 
