@@ -434,6 +434,8 @@ namespace polyfem::solver
 			t = Tree();
 		for (auto &d : deep_dirs_)
 			d.clear();
+		for (auto &p : deep_pts_)
+			p.clear();
 		pending_refinement_.reset();
 		recompute_ = kept_ = false;
 		retries_ = 0;
@@ -769,14 +771,34 @@ namespace polyfem::solver
 		return out;
 	}
 
+	Eigen::VectorXd ElasticForm::point_det(const int e, const Eigen::MatrixXd &P, const Eigen::VectorXd &x) const
+	{
+		const int dim = is_volume_ ? 3 : 2;
+		ElementAssemblyValues vals;
+		vals.compute(e, is_volume_, P, bases_[e], geom_bases_[e]);
+		const Eigen::MatrixXd u = local_disp(e, x);
+		Eigen::VectorXd out(P.rows());
+		for (int k = 0; k < P.rows(); ++k)
+		{
+			Eigen::MatrixXd F = Eigen::MatrixXd::Identity(dim, dim);
+			for (size_t i = 0; i < vals.basis_values.size(); ++i)
+				F += u.row(i).transpose() * vals.basis_values[i].grad_t_m.row(k);
+			out(k) = F.allFinite() ? F.determinant() : std::nan("");
+		}
+		return out;
+	}
+
 	bool ElasticForm::deep_commit(const int id, const utils::Tree &witness) const
 	{
 		const int dim = is_volume_ ? 3 : 2;
 		const int D = experiments::settings().deep_leaf_depth;
 		if (deep_dirs_.size() != bases_.size())
 			deep_dirs_.resize(bases_.size());
+		if (deep_pts_.size() != bases_.size())
+			deep_pts_.resize(bases_.size());
 		const Tree saved_tree = quadrature_hierarchy_[id];
 		const auto saved_dirs = deep_dirs_[id];
+		const auto saved_pts = deep_pts_[id];
 
 		// The witness, cut at absolute depth D, merged in full.
 		std::function<void(const Tree &, Tree &, int)> trunc = [&](const Tree &w, Tree &o, const int d) {
@@ -790,11 +812,14 @@ namespace polyfem::solver
 		trunc(witness, cut, 0);
 		bool changed = quadrature_hierarchy_[id].merge(cut, std::numeric_limits<int>::max());
 
-		// A deeper witness in a leaf touching the degenerate corner: one
-		// directional node for the depth-D leaf on its deepest path.
+		// A deeper witness: one point, with the leaf's whole mass, for the
+		// depth-D leaf on its deepest path. In a leaf touching the degenerate
+		// corner it is a directional node (the limit of F at the corner along
+		// the direction that minimizes det F within the leaf); elsewhere, the
+		// point of the leaf where det F is smallest.
 		const utils::DegenerateCorner &c = corner(id);
 		const Eigen::VectorXd &xl = deep_locate_x_;
-		if (c.vertex >= 0 && witness.depth() > D && xl.size() == n_bases_ * dim)
+		if (witness.depth() > D && xl.size() == n_bases_ * dim)
 		{
 			Eigen::MatrixXd V = ref_vertices(dim);
 			const Tree *h = &quadrature_hierarchy_[id], *w = &witness;
@@ -812,11 +837,46 @@ namespace polyfem::solver
 				h = &h->child(best);
 				w = &w->child(best);
 			}
-			const Eigen::RowVectorXd v = ref_vertices(dim).row(c.vertex);
+			const Eigen::RowVectorXd v = c.vertex >= 0 ? Eigen::RowVectorXd(ref_vertices(dim).row(c.vertex)) : Eigen::RowVectorXd();
 			int vk = -1;
-			for (int k = 0; k <= dim; ++k)
+			for (int k = 0; c.vertex >= 0 && k <= dim; ++k)
 				if ((V.row(k) - v).norm() < 1e-14)
 					vk = k;
+			if (!h->has_children() && (int)path.size() == D && vk < 0)
+			{
+				// Barycentric coordinates mu in the leaf (sum <= 1) -> reference point.
+				auto to_ref = [&](const Eigen::RowVectorXd &mu) {
+					Eigen::RowVectorXd p = V.row(0);
+					for (int j = 0; j < dim; ++j)
+						p += mu(j) * (V.row(j + 1) - V.row(0));
+					return p;
+				};
+				auto f_int = [&](const Eigen::MatrixXd &Mu) {
+					Eigen::MatrixXd P(Mu.rows(), dim);
+					for (int i = 0; i < Mu.rows(); ++i)
+						P.row(i) = to_ref(Mu.row(i));
+					Eigen::VectorXd out = point_det(id, P, xl);
+					for (int i = 0; i < out.size(); ++i)
+						if (!std::isfinite(out(i)))
+							out(i) = std::numeric_limits<double>::infinity();
+					return out;
+				};
+				int its = 0;
+				const Eigen::RowVectorXd mu0 = Eigen::RowVectorXd::Constant(dim, 1. / (dim + 1));
+				const auto [mu_star, a] = simplex_minimize(f_int, mu0, 1e-4, 30, &its);
+				if (std::isfinite(a))
+				{
+					const Eigen::RowVectorXd p = to_ref(mu_star);
+					auto it = deep_pts_[id].find(path);
+					if (it == deep_pts_[id].end() || (it->second - p).norm() > 1e-12)
+					{
+						deep_pts_[id][path] = p;
+						changed = true;
+					}
+					logger().debug("Deep leaf: elem {} depth {} point [{:.6g}, {:.6g}, {:.6g}] det F {:.4e} (newton its {}), {} points at minimum in the element",
+								   id, D, p(0), p(1), dim > 2 ? p(2) : 0., a, its, deep_pts_[id].size());
+				}
+			}
 			if (!h->has_children() && (int)path.size() == D && vk >= 0)
 			{
 				// Directions from the corner through the leaf's opposite face.
@@ -883,6 +943,7 @@ namespace polyfem::solver
 			logger().debug("Deep leaf: update of element {} makes its energy non-finite; reverted", id);
 			quadrature_hierarchy_[id] = saved_tree;
 			deep_dirs_[id] = saved_dirs;
+			deep_pts_[id] = saved_pts;
 			rebuild_element_quadrature(id);
 			return false;
 		}
@@ -895,7 +956,8 @@ namespace polyfem::solver
 		if (dir_nodes_.size() != bases_.size())
 			dir_nodes_.resize(bases_.size());
 		const bool has_dirs = e < (int)deep_dirs_.size() && !deep_dirs_[e].empty();
-		if (!has_dirs)
+		const bool has_pts = e < (int)deep_pts_.size() && !deep_pts_[e].empty();
+		if (!has_dirs && !has_pts)
 		{
 			update_quadrature(e, dim, quadrature_hierarchy_[e], quadrature_order_, bases_[e], geom_bases_[e], ass_vals_cache_, degenerate_ != nullptr);
 			if (!dir_nodes_[e].empty() && ass_vals_cache_.is_initialized())
@@ -903,10 +965,12 @@ namespace polyfem::solver
 			dir_nodes_[e].clear();
 			return;
 		}
-		const auto &dirs = deep_dirs_[e];
+		static const std::map<std::vector<int>, Eigen::RowVectorXd> none;
+		const auto &dirs = has_dirs ? deep_dirs_[e] : none;
+		const auto &pts = has_pts ? deep_pts_[e] : none;
 		const Quadrature rule = degenerate_ ? degenerate_quadrature(dim) : corner_quadrature(dim, quadrature_order_);
 		const double rule_sum = rule.weights.sum();
-		const Eigen::RowVectorXd v = ref_vertices(dim).row(corner(e).vertex);
+		const Eigen::RowVectorXd v = has_dirs ? Eigen::RowVectorXd(ref_vertices(dim).row(corner(e).vertex)) : Eigen::RowVectorXd();
 
 		std::vector<Eigen::RowVectorXd> P, cents;
 		std::vector<double> W;
@@ -927,6 +991,13 @@ namespace polyfem::solver
 			for (int j = 0; j < dim; ++j)
 				M.col(j) = (V.row(j + 1) - V.row(0)).transpose();
 			const double scale = std::abs(M.determinant()); // leaf volume / reference volume
+			const auto ip = pts.find(path);
+			if (ip != pts.end())
+			{
+				P.push_back(ip->second);
+				W.push_back(rule_sum * scale);
+				return;
+			}
 			const auto it = dirs.find(path);
 			if (it == dirs.end())
 			{
@@ -960,6 +1031,13 @@ namespace polyfem::solver
 		if (!ass_vals_cache_.is_initialized())
 			log_and_throw_error("Deep-leaf quadrature needs an initialized assembly cache");
 		ass_vals_cache_.update(e, is_volume_, bases_[e], geom_bases_[e]);
+		if (dn.empty())
+		{
+			if (!dir_nodes_[e].empty())
+				ass_vals_cache_.mutable_entry(e).limit_node.clear();
+			dir_nodes_[e].clear();
+			return;
+		}
 
 		// Mass of a directional node: |det grad X| at its leaf's centroid (the node itself sits at the corner).
 		Eigen::MatrixXd C(cents.size(), dim);

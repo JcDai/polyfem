@@ -198,6 +198,8 @@ namespace polyfem::solver
 		};
 		/// Per element: leaf path in quadrature_hierarchy_ -> unit direction from the corner.
 		mutable std::vector<std::map<std::vector<int>, Eigen::RowVectorXd>> deep_dirs_;
+		/// Per element: leaf path in quadrature_hierarchy_ -> point at the minimum of det F (reference coordinates), for deep leaves away from the corner.
+		mutable std::vector<std::map<std::vector<int>, Eigen::RowVectorXd>> deep_pts_;
 		/// Per element: the directional nodes of its live quadrature.
 		mutable std::vector<std::vector<DirNode>> dir_nodes_;
 		/// Configuration to locate the minimum at, and to check finiteness at.
@@ -212,6 +214,8 @@ namespace polyfem::solver
 		Eigen::MatrixXd local_disp(const int e, const Eigen::VectorXd &x) const;
 		std::vector<Eigen::MatrixXd> limit_grads(const int e, const Eigen::MatrixXd &dirs) const;
 		Eigen::VectorXd limit_det(const int e, const Eigen::MatrixXd &dirs, const Eigen::VectorXd &x) const;
+		/// det F of element @p e at reference points @p P in configuration @p x (floating point).
+		Eigen::VectorXd point_det(const int e, const Eigen::MatrixXd &P, const Eigen::VectorXd &x) const;
 
 		Eigen::VectorXd x_prev_;
 

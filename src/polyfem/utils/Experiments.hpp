@@ -67,11 +67,11 @@ namespace polyfem::experiments
 		/// Deep-leaf quadrature, 0 = off. When the continuous inversion check
 		/// caps a step (or the static one rejects it), the element's quadrature
 		/// follows the check's witness in full down to this depth (instead of
-		/// two levels per capped step); a witness deeper than that, in a leaf
-		/// touching a degenerate corner,
-		/// gives that leaf a single directional node with the leaf's whole mass:
-		/// the limit of F at the corner along the direction (within the leaf)
-		/// that minimizes its determinant.
+		/// two levels per capped step); a witness deeper than that gives its
+		/// leaf a single point with the leaf's whole mass at the minimum of
+		/// det F in the leaf: in a leaf touching a degenerate corner, a
+		/// directional node (the limit of F at the corner along the direction
+		/// within the leaf that minimizes its determinant).
 		int deep_leaf_depth = 0;
 
 		/// Directory for the energy trace CSV files (solver/EnergyTrace.hpp);
