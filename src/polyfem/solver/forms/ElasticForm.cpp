@@ -435,7 +435,7 @@ namespace polyfem::solver
 		for (auto &d : deep_dirs_)
 			d.clear();
 		pending_refinement_.reset();
-		recompute_ = false;
+		recompute_ = kept_ = false;
 		retries_ = 0;
 	}
 
@@ -610,38 +610,53 @@ namespace polyfem::solver
 		logger().debug("Static Jacobian check rejected step at element {} (witness depth {})", id, witness.depth());
 
 		// Refine towards the violation, so that energy evaluated at this
-		// configuration samples it and is no longer finite. A rejection ends
-		// the line search, and the next direction is computed on the refined
-		// quadrature, so a later trial that reaches this configuration is
-		// turned down by the line search's ordinary finiteness checks. Merge
-		// the whole witness path rather than the usual two levels: the
-		// violation is certified at a vertex of the deepest witness simplex,
-		// and that vertex is only a quadrature point (corner quadrature) once
-		// that level of refinement exists.
-		if (id >= 0)
-		{
-			// The witness certifies the violation at x1: directional nodes are
-			// placed for x1, and the refinement must keep the energy finite at
-			// x0, where the solver stays.
-			const Tree saved = quadrature_hierarchy_[id];
-			deep_locate_x_ = x1;
-			deep_guard_x_ = x0;
-			bool changed = commit_refinement(id, witness, std::numeric_limits<int>::max());
-			if (changed && !std::isfinite(element_energy(id, x0)))
-			{
-				logger().debug("Static Jacobian check: refinement of element {} makes its energy non-finite at x0; reverted", id);
-				quadrature_hierarchy_[id] = saved;
-				rebuild_element_quadrature(id);
-				changed = false;
-			}
+		// configuration samples it and is no longer finite. A rejection that
+		// changes the quadrature ends the line search, and the next direction
+		// is computed on the refined quadrature, so a later trial that reaches
+		// this configuration is turned down by the line search's ordinary
+		// finiteness checks. Merge the whole witness path rather than the
+		// usual two levels: the violation is certified at a vertex of the
+		// deepest witness simplex, and that vertex is only a quadrature point
+		// (corner quadrature) once that level of refinement exists.
+		if (id < 0)
+			return false;
 
-			// experiments/check_inversion_retry: the direction was computed on
-			// the old quadrature; have the solver recompute it at x0 rather
-			// than treat the rejection as a failed line search (which moves on
-			// to the next descent strategy).
-			const auto &retry = experiments::settings().check_inversion_retry;
-			if (retry.enabled && changed && retries_ < retry.max_retries)
+		// The witness certifies the violation at x1: directional nodes are
+		// placed for x1, and the refinement must keep the energy finite at
+		// x0, where the solver stays.
+		const Tree saved = quadrature_hierarchy_[id];
+		deep_locate_x_ = x1;
+		deep_guard_x_ = x0;
+		bool changed = commit_refinement(id, witness, std::numeric_limits<int>::max());
+		if (changed && !std::isfinite(element_energy(id, x0)))
+		{
+			logger().debug("Static Jacobian check: refinement of element {} makes its energy non-finite at x0; reverted", id);
+			quadrature_hierarchy_[id] = saved;
+			rebuild_element_quadrature(id);
+			changed = false;
+		}
+
+		// experiments/check_inversion_retry. Past max_retries, a refining
+		// rejection ends the line search as a failure, so the solver moves on
+		// to the next descent strategy, whose direction leads away from where
+		// the refinements were heading.
+		const auto &retry = experiments::settings().check_inversion_retry;
+		if (retry.enabled)
+		{
+			if (!changed)
 			{
+				// Nothing to refine (the check gave up, so the witness is
+				// empty, or the quadrature already follows it): the problem is
+				// unchanged, so back off along the current direction, as the
+				// continuous check would cap the step.
+				kept_ = true;
+				logger().debug("Static check rejected the step at element {} without changing the quadrature; backtracking", id);
+			}
+			else if (retries_ < retry.max_retries)
+			{
+				// The direction was computed on the old quadrature: have the
+				// solver recompute it at x0 rather than treat the rejection as
+				// a failed line search.
 				recompute_ = true;
 				++retries_;
 				logger().debug("Retry: static check rejected the step at element {}; recomputing the direction (retry {})", id, retries_);
@@ -1012,6 +1027,13 @@ namespace polyfem::solver
 	{
 		const bool r = recompute_;
 		recompute_ = false;
+		return r;
+	}
+
+	bool ElasticForm::rejection_kept_problem()
+	{
+		const bool r = kept_;
+		kept_ = false;
 		return r;
 	}
 

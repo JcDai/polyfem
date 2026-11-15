@@ -98,7 +98,7 @@
             "enabled",
             "max_retries"
         ],
-        "doc": "When the continuous inversion check cuts a step, refine the blocking element's quadrature at the current point and, if that changed the quadrature, recompute the direction there instead of taking the truncated step. With the static check, a rejected step that refined the quadrature likewise recomputes the direction instead of counting as a failed line search (which moves on to the next descent strategy)."
+        "doc": "When the continuous inversion check cuts a step, refine the blocking element's quadrature at the current point and, if that changed the quadrature, recompute the direction there instead of taking the truncated step. With the static check, a rejected step that refined the quadrature likewise recomputes the direction instead of counting as a failed line search (which moves on to the next descent strategy); a rejection that changes nothing (the check gave up, or nothing is left to refine) lets the line search back off along the current direction instead."
     },
     {
         "pointer": "/experiments/check_inversion_retry/enabled",

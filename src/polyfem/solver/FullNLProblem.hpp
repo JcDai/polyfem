@@ -24,6 +24,7 @@ namespace polyfem::solver
 		virtual bool is_step_collision_free(const TVector &x0, const TVector &x1);
 		virtual double max_step_size(const TVector &x0, const TVector &x1) override;
 		bool direction_needs_recompute() override;
+		bool rejection_kept_problem() override;
 
 		virtual void line_search_begin(const TVector &x0, const TVector &x1) override;
 		virtual void line_search_end() override;

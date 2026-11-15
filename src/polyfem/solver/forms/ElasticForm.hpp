@@ -144,6 +144,7 @@ namespace polyfem::solver
 		/// most recent max_step_size() call, once the step is accepted.
 		void post_step(const polysolve::nonlinear::PostStepData &data) override;
 		bool direction_needs_recompute() override;
+		bool rejection_kept_problem() override;
 
 		/// Smallest det F over the live quadrature points, from the same robust
 		/// evaluation as robust AMIPS (ratio of the reference dets of the
@@ -242,6 +243,7 @@ namespace polyfem::solver
 		/// committed in post_step() once a step is accepted.
 		mutable std::optional<std::pair<int, utils::Tree>> pending_refinement_;
 		mutable bool recompute_ = false; ///< see direction_needs_recompute()
+		mutable bool kept_ = false;      ///< see rejection_kept_problem()
 		mutable int retries_ = 0;        ///< recomputes requested since the last accepted step
 
 		/// @brief Cumulative cost of the conservative checks, reported by

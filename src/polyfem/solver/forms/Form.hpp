@@ -82,6 +82,11 @@ namespace polyfem::solver
 		/// resets it.
 		virtual bool direction_needs_recompute() { return false; }
 
+		/// True if the form rejected a step in is_step_acceptable() without
+		/// changing itself, so the line search can keep backtracking along the
+		/// current direction. Reading it resets it.
+		virtual bool rejection_kept_problem() { return false; }
+
 		/// @brief Initialize variables used during the line search
 		/// @param x0 Current solution
 		/// @param x1 Next solution

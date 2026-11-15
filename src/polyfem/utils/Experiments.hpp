@@ -51,8 +51,12 @@ namespace polyfem::experiments
 		/// max_retries times between accepted steps. With the static check, a
 		/// rejected step that refined the quadrature likewise recomputes the
 		/// direction instead of counting as a failed line search (which moves
-		/// on to the next descent strategy). Needs polysolve with
-		/// Problem::direction_needs_recompute (cmake/patches/
+		/// on to the next descent strategy; past max_retries it still does),
+		/// and a rejection that changes nothing (the check gave up, or nothing
+		/// left to refine) lets the line search back off along the current
+		/// direction, as the continuous check would cap the step. Needs
+		/// polysolve with Problem::direction_needs_recompute and
+		/// Problem::rejection_kept_problem (cmake/patches/
 		/// polysolve_direction_recompute.patch).
 		struct CheckInversionRetry
 		{

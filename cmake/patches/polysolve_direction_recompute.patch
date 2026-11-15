@@ -1,8 +1,8 @@
 diff --git a/src/polysolve/nonlinear/Problem.hpp b/src/polysolve/nonlinear/Problem.hpp
-index 91edbd3..3ba2c13 100644
+index 91edbd3..eaa17b7 100644
 --- a/src/polysolve/nonlinear/Problem.hpp
 +++ b/src/polysolve/nonlinear/Problem.hpp
-@@ -89,6 +89,14 @@ namespace polysolve::nonlinear
+@@ -89,6 +89,20 @@ namespace polysolve::nonlinear
          /// @return Maximum step size.
          virtual double max_step_size(const TVector &x0, const TVector &x1) { return 1; }
  
@@ -13,6 +13,12 @@ index 91edbd3..3ba2c13 100644
 +        /// recomputes the direction at the same x, without changing strategy.
 +        /// Reading it resets it.
 +        virtual bool direction_needs_recompute() { return false; }
++
++        /// Asked after is_step_acceptable() rejected a step: true if the
++        /// rejection left the objective unchanged, so the line search keeps
++        /// backtracking along the same direction (as for a non-finite energy)
++        /// instead of ending. Reading it resets it.
++        virtual bool rejection_kept_problem() { return false; }
 +
          // --- Callbacks ------------------------------------------------------
  
@@ -66,6 +72,23 @@ index 57b1ea9..03b2638 100644
              if (std::isnan(rate))
              {
                  const auto current_name = descent_strategy_name();
+diff --git a/src/polysolve/nonlinear/line_search/Backtracking.cpp b/src/polysolve/nonlinear/line_search/Backtracking.cpp
+index 21993e1..34b92b9 100644
+--- a/src/polysolve/nonlinear/line_search/Backtracking.cpp
++++ b/src/polysolve/nonlinear/line_search/Backtracking.cpp
+@@ -60,6 +60,12 @@ namespace polysolve::nonlinear::line_search
+             if (objFunc.is_step_acceptable(x, new_x))
+                 break; // found a good step size
+ 
++            if (objFunc.rejection_kept_problem())
++            {
++                m_logger.debug("Step of size {} rejected by the problem, which is unchanged; backtracking", step_size);
++                continue;
++            }
++
+             // Rejected. The problem may have changed its discretization, and
+             // delta_x was computed for the old one, so do not keep searching
+             // along it: fail through the caller's usual path (which restores
 diff --git a/src/polysolve/nonlinear/line_search/LineSearch.cpp b/src/polysolve/nonlinear/line_search/LineSearch.cpp
 index b456562..493d1a3 100644
 --- a/src/polysolve/nonlinear/line_search/LineSearch.cpp

@@ -151,6 +151,14 @@ namespace polyfem::solver
 		return r;
 	}
 
+	bool FullNLProblem::rejection_kept_problem()
+	{
+		bool r = false;
+		for (auto &f : forms_)
+			r = f->rejection_kept_problem() || r; // read every flag, so all reset
+		return r;
+	}
+
 	void FullNLProblem::solution_changed(const TVector &x)
 	{
 		for (auto &f : forms_)
