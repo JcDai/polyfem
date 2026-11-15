@@ -620,8 +620,32 @@ namespace polyfem::solver
 		// that level of refinement exists.
 		if (id >= 0)
 		{
-			deep_locate_x_ = deep_guard_x_ = x0;
-			commit_refinement(id, witness, std::numeric_limits<int>::max());
+			// The witness certifies the violation at x1: directional nodes are
+			// placed for x1, and the refinement must keep the energy finite at
+			// x0, where the solver stays.
+			const Tree saved = quadrature_hierarchy_[id];
+			deep_locate_x_ = x1;
+			deep_guard_x_ = x0;
+			bool changed = commit_refinement(id, witness, std::numeric_limits<int>::max());
+			if (changed && !std::isfinite(element_energy(id, x0)))
+			{
+				logger().debug("Static Jacobian check: refinement of element {} makes its energy non-finite at x0; reverted", id);
+				quadrature_hierarchy_[id] = saved;
+				rebuild_element_quadrature(id);
+				changed = false;
+			}
+
+			// experiments/check_inversion_retry: the direction was computed on
+			// the old quadrature; have the solver recompute it at x0 rather
+			// than treat the rejection as a failed line search (which moves on
+			// to the next descent strategy).
+			const auto &retry = experiments::settings().check_inversion_retry;
+			if (retry.enabled && changed && retries_ < retry.max_retries)
+			{
+				recompute_ = true;
+				++retries_;
+				logger().debug("Retry: static check rejected the step at element {}; recomputing the direction (retry {})", id, retries_);
+			}
 		}
 
 		return false;

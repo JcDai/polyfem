@@ -48,7 +48,10 @@ namespace polyfem::experiments
 		/// element's quadrature at x0 (as an accepted capped step would) and,
 		/// if that changed the quadrature, have the solver recompute the
 		/// direction at x0 instead of taking the truncated step; at most
-		/// max_retries times between accepted steps. Needs polysolve with
+		/// max_retries times between accepted steps. With the static check, a
+		/// rejected step that refined the quadrature likewise recomputes the
+		/// direction instead of counting as a failed line search (which moves
+		/// on to the next descent strategy). Needs polysolve with
 		/// Problem::direction_needs_recompute (cmake/patches/
 		/// polysolve_direction_recompute.patch).
 		struct CheckInversionRetry
@@ -58,9 +61,10 @@ namespace polyfem::experiments
 		} check_inversion_retry;
 
 		/// Deep-leaf quadrature, 0 = off. When the continuous inversion check
-		/// caps a step, the element's quadrature follows the check's witness in
-		/// full down to this depth (instead of two levels per capped step); a
-		/// witness deeper than that, in a leaf touching a degenerate corner,
+		/// caps a step (or the static one rejects it), the element's quadrature
+		/// follows the check's witness in full down to this depth (instead of
+		/// two levels per capped step); a witness deeper than that, in a leaf
+		/// touching a degenerate corner,
 		/// gives that leaf a single directional node with the leaf's whole mass:
 		/// the limit of F at the corner along the direction (within the leaf)
 		/// that minimizes its determinant.

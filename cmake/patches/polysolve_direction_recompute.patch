@@ -1,14 +1,15 @@
 diff --git a/src/polysolve/nonlinear/Problem.hpp b/src/polysolve/nonlinear/Problem.hpp
-index 91edbd3..256719e 100644
+index 91edbd3..3ba2c13 100644
 --- a/src/polysolve/nonlinear/Problem.hpp
 +++ b/src/polysolve/nonlinear/Problem.hpp
-@@ -89,6 +89,13 @@ namespace polysolve::nonlinear
+@@ -89,6 +89,14 @@ namespace polysolve::nonlinear
          /// @return Maximum step size.
          virtual double max_step_size(const TVector &x0, const TVector &x1) { return 1; }
  
-+        /// Asked right after max_step_size(): true if the objective changed at
-+        /// x0 (e.g. its quadrature was refined) so that the current direction is
-+        /// stale. The line search then stops without a step and the solver
++        /// Asked right after max_step_size(), and after is_step_acceptable()
++        /// rejected a step: true if the objective changed at x0 (e.g. its
++        /// quadrature was refined) so that the current direction is stale.
++        /// The line search then stops without a step and the solver
 +        /// recomputes the direction at the same x, without changing strategy.
 +        /// Reading it resets it.
 +        virtual bool direction_needs_recompute() { return false; }
@@ -66,7 +67,7 @@ index 57b1ea9..03b2638 100644
              {
                  const auto current_name = descent_strategy_name();
 diff --git a/src/polysolve/nonlinear/line_search/LineSearch.cpp b/src/polysolve/nonlinear/line_search/LineSearch.cpp
-index b456562..9ebda10 100644
+index b456562..493d1a3 100644
 --- a/src/polysolve/nonlinear/line_search/LineSearch.cpp
 +++ b/src/polysolve/nonlinear/line_search/LineSearch.cpp
 @@ -86,6 +86,7 @@ namespace polysolve::nonlinear::line_search
@@ -92,6 +93,25 @@ index b456562..9ebda10 100644
              if (std::isnan(step_size))
                  return NaN;
          }
+@@ -161,6 +170,18 @@ namespace polysolve::nonlinear::line_search
+ 
+         const double descent_step_size = step_size;
+ 
++        if (problem_changed && objFunc.direction_needs_recompute())
++        {
++            // A step was rejected by is_step_acceptable(), which changed the
++            // objective at x and asked for a new direction: stop without a
++            // step, as after max_step_size(), instead of failing.
++            m_logger.debug("Line search stopped: step rejected and objective changed at x, recomputing the direction");
++            objFunc.solution_changed(x);
++            objFunc.line_search_end();
++            recompute_requested = true;
++            return NaN;
++        }
++
+         if (cur_iter >= current_max_step_size_iter() || step_size <= current_min_step_size())
+         {
+             m_logger.log(is_final_strategy ? spdlog::level::warn : spdlog::level::debug,
 diff --git a/src/polysolve/nonlinear/line_search/LineSearch.hpp b/src/polysolve/nonlinear/line_search/LineSearch.hpp
 index f20e612..8e8fb4b 100644
 --- a/src/polysolve/nonlinear/line_search/LineSearch.hpp
