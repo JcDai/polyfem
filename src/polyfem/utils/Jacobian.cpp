@@ -995,6 +995,29 @@ namespace polyfem::utils
 #ifdef POLYFEM_WITH_MISO
 	namespace
 	{
+		/// Subdivision path of the deepest inconclusive box among those solve()
+		/// returns when it gives up (the box it stopped at and the whole queue);
+		/// among equally deep boxes, the one whose constraint enclosure reaches
+		/// lowest. Empty if no box carries its history.
+		template <typename Subdomain>
+		std::vector<unsigned> deepest_inconclusive_path(std::vector<Subdomain> &boxes)
+		{
+			Subdomain *best = nullptr;
+			double best_lo = std::numeric_limits<double>::infinity();
+			for (auto &s : boxes)
+			{
+				if (!s.history)
+					continue;
+				const double lo = lower(s.inclusion(0));
+				if (!best || s.depth > best->depth || (s.depth == best->depth && lo < best_lo))
+				{
+					best = &s;
+					best_lo = lo;
+				}
+			}
+			return best ? best->history->path() : std::vector<unsigned>{};
+		}
+
 		/// The static degenerate check on every element; calls @p on_element
 		/// with (element, invalid, witness path) and stops when it returns false.
 		template <typename F>
@@ -1017,8 +1040,11 @@ namespace polyfem::utils
 				auto sols = solve(std::move(problem), params, &info);
 				if (!info.success())
 				{
-					logger().warn("Degenerate Jacobian solve gave up at element {} after {} iterations", e, info.numIterations);
-					return on_element(e, true, std::vector<unsigned>{});
+					// Ambiguous counts as invalid; refine towards the deepest box
+					// the solver could not decide, as if it were the witness.
+					const std::vector<unsigned> path = deepest_inconclusive_path(sols);
+					logger().warn("Degenerate Jacobian solve gave up at element {} after {} iterations; witness: deepest inconclusive box (depth {})", e, info.numIterations, path.size());
+					return on_element(e, true, path);
 				}
 				if (sols.empty())
 					return on_element(e, false, std::vector<unsigned>{});
@@ -1254,9 +1280,11 @@ namespace polyfem::utils
 			auto sols = solve(std::move(problem), params, &info);
 			if (!info.success())
 			{
-				// Ambiguous counts as invalid, but there is no certified
-				// location to refine towards, so leave the tree empty.
-				logger().warn("Jacobian solve gave up at element {} after {} iterations", e, info.numIterations);
+				// Ambiguous counts as invalid; refine towards the deepest box
+				// the solver could not decide, as if it were the witness.
+				const std::vector<unsigned> path = deepest_inconclusive_path(sols);
+				logger().warn("Jacobian solve gave up at element {} after {} iterations; witness: deepest inconclusive box (depth {})", e, info.numIterations, path.size());
+				build_spatial_tree(witness, path, n_children);
 				return true;
 			}
 			if (sols.empty())

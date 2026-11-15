@@ -294,8 +294,10 @@ namespace polyfem::utils
 	///         The tree is the subdivision path to where the violation was
 	///         found inside that element, in the same child numbering as the
 	///         quadrature refinement; it is empty for P1 (constant Jacobian,
-	///         nothing to localize), when the violation is already visible at
-	///         the element's corners, or when the solver gave up.
+	///         nothing to localize), or when the violation is already visible
+	///         at the element's corners. When the solver gives up, the element
+	///         counts as invalid and the tree is the path to the deepest box it
+	///         could not decide.
 	/// @param rest Rest positions from rest_nodes(); computed here if null.
 	/// @param degenerate If given, use the degenerate checks (DegenerateMesh)
 	///        for every element; @p rest is then unused.
